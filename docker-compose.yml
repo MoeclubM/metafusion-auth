@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  auth:
+    build: .
+    container_name: metafusion-auth
+    restart: unless-stopped
+    environment:
+      - PORT=8081
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=metafusion
+      - DB_NAME=metafusion_auth
+      - JWT_SECRET=change-me-in-production
+    ports:
+      - "8081:8081"
+    networks:
+      - metafusion-net
+
+networks:
+  metafusion-net:
+    external: true
