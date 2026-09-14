@@ -1,5 +1,7 @@
 version: '3.8'
 
+# 账号服务独立编排：只依赖 PostgreSQL。账号表位于独立 auth schema，与目录库同实例，
+# 切流前由主仓库写入，本服务为切流目标。
 services:
   auth:
     build: .
@@ -9,9 +11,14 @@ services:
       - PORT=8081
       - DB_HOST=postgres
       - DB_PORT=5432
-      - DB_USER=metafusion
-      - DB_NAME=metafusion_auth
-      - JWT_SECRET=change-me-in-production
+      - DB_USER=${DB_USER:-metafusion}
+      - DB_PASSWORD=${DB_PASSWORD:?DB_PASSWORD must be set in .env}
+      - DB_NAME=${AUTH_DB_NAME:-metafusion_db}
+      # 必须与主仓库一致：issuer/audience 变化会让已签发的令牌全部失效。
+      - AUTH_JWT_ISSUER=${AUTH_JWT_ISSUER:-https://findverse.cc/api}
+      - AUTH_JWT_AUDIENCE=${AUTH_JWT_AUDIENCE:-metafusion}
+      # 生产必须配置持久 RSA 私钥，否则重启即掉线（进程内临时密钥）。
+      - AUTH_JWT_PRIVATE_KEY=${AUTH_JWT_PRIVATE_KEY:-}
     ports:
       - "8081:8081"
     networks:
