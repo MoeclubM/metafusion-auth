@@ -60,6 +60,20 @@ ALTER TABLE auth.users DROP CONSTRAINT IF EXISTS users_role_check;
 ALTER TABLE auth.users ADD CONSTRAINT users_role_check CHECK (role IN ('user','editor','admin'));
 `
 
+// seedClients 是第一方 OAuth 客户端的种子：这三个客户端原先由目录服务在启动时写入
+// （`schema.sql` + `Store.Initialize`）。账号拆出后 auth schema 归本服务所有，
+// 种子随之搬到这里，目录侧不再往这个 schema 写任何一行。
+//
+// 语义与迁移过来的那份逐字一致：secret_hash 为空表示"受信任的第一方，允许无密钥"，
+// redirect_uris 覆盖线上域名与本地开发端口，ON CONFLICT 保护后台改过的配置不被覆盖。
+const seedClients = `
+INSERT INTO auth.oauth_clients(id, secret_hash, name, redirect_uris, trusted)
+VALUES
+ ('metafusion-resources', '', 'MetaFusion 资源存储与下载管理中心', ARRAY['https://resources.findverse.cc/callback', 'http://localhost:3001/callback'], true),
+ ('metafusion-forum', '', 'MetaFusion 社区论坛', ARRAY['https://forum.findverse.cc/auth/oauth2_basic/callback', 'http://localhost:4200/auth/callback'], true),
+ ('metafusion-catalog', '', 'MetaFusion 元数据知识库', ARRAY['https://findverse.cc/auth/callback', 'http://localhost:3000/auth/callback'], true)
+ON CONFLICT (id) DO NOTHING;`
+
 func Open(ctx context.Context, dsn string) (*Store, error) {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
@@ -76,7 +90,10 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 func (s *Store) Close() error { return s.DB.Close() }
 
 func (s *Store) Init(ctx context.Context) error {
-	_, err := s.DB.ExecContext(ctx, schema)
+	if _, err := s.DB.ExecContext(ctx, schema); err != nil {
+		return err
+	}
+	_, err := s.DB.ExecContext(ctx, seedClients)
 	return err
 }
 

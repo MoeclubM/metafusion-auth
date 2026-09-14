@@ -49,11 +49,14 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 ## 数据与迁移
 
 账号表位于**独立的 `auth` schema**，与目录库同实例但不同 schema，且不跨 schema 建外键
-（目录侧只保留裸 UUID 引用）。因此本服务**不需要数据搬运**：
+（目录侧只保留裸 UUID 引用）。因此切流**不需要数据搬运**，只需要把网关前缀指过来。
 
-- 切流前：主仓库继续服务 `/api/auth/*` 等路由（唯一写入方），本服务只做验证性启动。
-- 切流时：把网关的五个前缀指到本服务即可，数据仍在同一个 `auth` schema。
-- 切流后：主仓库的相关路由随 P4 下线，`auth` schema 由本服务独占写入。
+- 表结构：`Init` 幂等建表（`CREATE ... IF NOT EXISTS` + 放宽 `users_role_check`），
+  **线上 auth schema 的列形状是唯一基线**（见 `internal/store/schema_parity_test.go` 的冻结值）。
+- 第一方 OAuth 客户端（`metafusion-catalog` / `-forum` / `-resources`）的种子也在 `Init` 里，
+  与建表同一处：这三个客户端原先由目录服务在启动时写入，账号拆出后随 schema 一起搬进来，
+  `ON CONFLICT DO NOTHING` 保护后台改过的配置。目录服务现在**不再创建、也不再写入任何 auth 对象**。
+- 该服务**没有版本化迁移**：建表语句即当前终态，改动需同时更新冻结用例。
 
 ## 环境变量
 
@@ -74,7 +77,9 @@ go test ./... && go vet ./...
 
 ## 迁移状态
 
-- 主仓库仍提供全部认证端点（当前线上入口），本服务为切流目标；两者共用同一 `auth` schema，
-  切流前保持"单体唯一写入"，因此不存在双写冲突。
-- 服务端会话（`auth.sessions`）保留为查库兜底：存量不透明令牌与"登出立即失效"依赖它，
-  因此主仓库切流后仍应保留验签+兜底双模式，直到存量令牌自然过期。
+- **已切流（2026-09-14，开发实例）**：网关把 `/api/setup`、`/api/auth/*`、`/api/admin/users*`、
+  `/api/oauth/*`、`/api/oidc/*`、`/api/.well-known/*` 指到本服务，本服务是这些端点的唯一实现。
+- 主仓库已删除账号实现（`identity.go` / `token.go` 的签发侧 / 相关路由），只保留 RS256 验签：
+  目录侧验签失败不再回退查 `auth.sessions`，`auth` schema 的读写方只有本服务。
+- 服务端会话（`auth.sessions`）仍然是本服务的一部分：登录写入、refresh 轮转、登出删除；
+  它同时兜底存量不透明会话令牌（老实例登录后仍带着 Cookie 的用户不会掉线）。
