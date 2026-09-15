@@ -24,7 +24,14 @@ func (s *Store) User(ctx context.Context, token string) (*User, error) {
 		return &u, nil
 	}
 	err = s.DB.QueryRowContext(ctx, "SELECT u.id,u.username,COALESCE(u.email,''),u.role FROM auth.oauth_tokens t JOIN auth.users u ON u.id=t.user_id WHERE t.token_hash=$1 AND t.expires_at>now()", h).Scan(&u.ID, &u.Username, &u.Email, &u.Role)
-	return &u, err
+	if err != nil {
+		return &u, err
+	}
+	// 查库路径同样补齐组与权限：不补齐会让"令牌验签失败但会话有效"的请求在管理台被 403。
+	if err := s.WithAccess(ctx, &u); err != nil {
+		return &u, err
+	}
+	return &u, nil
 }
 
 func (s *Store) SetupNeeded(ctx context.Context) (bool, error) {
@@ -68,8 +75,19 @@ func (s *Store) CreateUserWithRole(ctx context.Context, username, email, passwor
 			}
 			u.Role = "admin"
 		}
-		_, err := tx.ExecContext(ctx, "INSERT INTO auth.users(id,username,email,password_hash,role) VALUES($1,$2,$3,$4,$5)", u.ID, u.Username, u.Email, string(hash), u.Role)
-		return err
+		if _, err := tx.ExecContext(ctx, "INSERT INTO auth.users(id,username,email,password_hash,role) VALUES($1,$2,$3,$4,$5)", u.ID, u.Username, u.Email, string(hash), u.Role); err != nil {
+			return err
+		}
+		for _, code := range RoleToGroups(u.Role) {
+			var gid string
+			if err := tx.QueryRowContext(ctx, "SELECT id FROM auth.groups WHERE code=$1", code).Scan(&gid); err != nil {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, "INSERT INTO auth.user_groups(user_id,group_id,granted_by) VALUES($1,$2,$3) ON CONFLICT DO NOTHING", u.ID, gid, nullableActor(actor)); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	return u, err
 }
@@ -83,6 +101,10 @@ func (s *Store) Login(ctx context.Context, username, password string) (string, U
 	err := s.DB.QueryRowContext(ctx, "SELECT id,username,COALESCE(email,''),role,password_hash FROM auth.users WHERE username=$1 OR (email=$1 AND email<>'')", strings.TrimSpace(username)).Scan(&u.ID, &u.Username, &u.Email, &u.Role, &stored)
 	if err != nil || bcrypt.CompareHashAndPassword([]byte(stored), []byte(password)) != nil {
 		return "", u, fmt.Errorf("invalid_credentials")
+	}
+	// 令牌里带组与权限：下游服务本地验签即可判定能力，不必回调账号服务。
+	if err := s.WithAccess(ctx, &u); err != nil {
+		return "", u, err
 	}
 	token, _, err := s.issueSessionToken(u)
 	if err != nil {
@@ -142,6 +164,9 @@ func (s *Store) Refresh(ctx context.Context, token string) (string, User, error)
 		return "", User{}, fmt.Errorf("invalid_token")
 	}
 	u = &fresh
+	if err := s.WithAccess(ctx, u); err != nil {
+		return "", User{}, err
+	}
 	if s.Tokens == nil {
 		return token, *u, nil // 纯查库模式无续期语义，原令牌继续有效
 	}
@@ -397,7 +422,47 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 		}
 		out = append(out, u)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.attachAccess(ctx, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// attachAccess 批量补齐用户的组与权限：一次查完全部成员关系，避免列表页 N+1 查询。
+func (s *Store) attachAccess(ctx context.Context, users []User) error {
+	if len(users) == 0 {
+		return nil
+	}
+	rows, err := s.DB.QueryContext(ctx, "SELECT ug.user_id, g.code, g.permissions FROM auth.user_groups ug JOIN auth.groups g ON g.id=ug.group_id")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	byUser := map[string][]Group{}
+	for rows.Next() {
+		var uid string
+		var code string
+		var perms []string
+		if err := rows.Scan(&uid, &code, pq.Array(&perms)); err != nil {
+			return err
+		}
+		byUser[uid] = append(byUser[uid], Group{Code: code, Permissions: perms})
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for i := range users {
+		gs := byUser[users[i].ID]
+		users[i].Groups = make([]string, 0, len(gs))
+		for _, g := range gs {
+			users[i].Groups = append(users[i].Groups, g.Code)
+		}
+		users[i].Permissions = ExpandPermissions(gs)
+	}
+	return nil
 }
 
 func (s *Store) UpdateUserRole(ctx context.Context, targetUserID, newRole string, actor *User) error {
@@ -416,14 +481,29 @@ func (s *Store) UpdateUserRole(ctx context.Context, targetUserID, newRole string
 			return fmt.Errorf("cannot_demote_sole_admin")
 		}
 	}
-	res, err := s.DB.ExecContext(ctx, "UPDATE auth.users SET role=$1 WHERE id=$2", newRole, targetUserID)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("user_not_found")
-	}
-	return nil
+	// 角色与组同步：历史角色映射到等价组，避免"改了角色但权限没变"的双轨漂移。
+	return s.write(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, "UPDATE auth.users SET role=$1 WHERE id=$2", newRole, targetUserID)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("user_not_found")
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM auth.user_groups WHERE user_id=$1", targetUserID); err != nil {
+			return err
+		}
+		for _, code := range RoleToGroups(newRole) {
+			var gid string
+			if err := tx.QueryRowContext(ctx, "SELECT id FROM auth.groups WHERE code=$1", code).Scan(&gid); err != nil {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, "INSERT INTO auth.user_groups(user_id,group_id,granted_by) VALUES($1,$2,$3) ON CONFLICT DO NOTHING", targetUserID, gid, actor.ID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (s *Store) ResetUserPassword(ctx context.Context, targetUserID, newPassword string, actor *User) error {

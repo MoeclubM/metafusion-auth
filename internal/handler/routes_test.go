@@ -9,14 +9,22 @@ import (
 	"github.com/MoeclubM/metafusion-auth/internal/store"
 )
 
-// frozenRoutes 是账号服务的切流契约：与主仓库 catalog 包的路由**逐字一致**，
+// frozenRoutes 是账号服务的路由契约。账号服务拆出后自有其账号生命周期端点
+// （注册 / 邀请码 / 权限组 / 实例设置），与目录服务不再是同一份路由表；
+// 改动路由会在这里失败，而不是等线上 404 才发现。
 // 另外按 OIDC 标准在根路径提供发现文档与 JWKS（发现文档里的地址取自 issuer，
 // 两个入口内容完全相同）。改动路由会在这里失败，而不是等线上 404 才发现。
 var frozenRoutes = []string{
+	"DELETE /api/admin/groups/:code",
 	"GET /.well-known/jwks.json",
 	"GET /.well-known/openid-configuration",
 	"GET /api/.well-known/openid-configuration",
+	"GET /api/admin/groups",
+	"GET /api/admin/invites",
+	"GET /api/admin/permissions",
+	"GET /api/admin/settings",
 	"GET /api/admin/users",
+	"GET /api/auth/invite",
 	"GET /api/auth/me",
 	"GET /api/auth/settings",
 	"GET /api/oauth/authorize",
@@ -24,14 +32,22 @@ var frozenRoutes = []string{
 	"GET /api/oauth/userinfo",
 	"GET /api/oidc/jwks",
 	"GET /api/setup",
+	"POST /api/admin/groups",
+	"POST /api/admin/invites",
+	"POST /api/admin/invites/:code/revoke",
 	"POST /api/admin/users",
 	"POST /api/auth/change-password",
+	"POST /api/auth/invite",
 	"POST /api/auth/login",
 	"POST /api/auth/logout",
 	"POST /api/auth/logout-all",
 	"POST /api/auth/refresh",
+	"POST /api/auth/register",
 	"POST /api/oauth/token",
 	"POST /api/setup",
+	"PUT /api/admin/groups/:code",
+	"PUT /api/admin/settings",
+	"PUT /api/admin/users/:id/groups",
 	"PUT /api/admin/users/:id/password",
 	"PUT /api/admin/users/:id/role",
 	"PUT /api/auth/password",

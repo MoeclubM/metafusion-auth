@@ -33,15 +33,17 @@ const AccessTokenTTL = 15 * time.Minute
 
 // Claims 是访问令牌的载荷。字段名遵循 OIDC 惯例，便于 E3 直接复用为 id_token。
 type Claims struct {
-	Subject  string `json:"sub"`
-	Username string `json:"preferred_username"`
-	Email    string `json:"email,omitempty"`
-	Role     string `json:"role"`
-	Issuer   string `json:"iss"`
-	Audience string `json:"aud"`
-	IssuedAt int64  `json:"iat"`
-	Expires  int64  `json:"exp"`
-	JTI      string `json:"jti"`
+	Subject     string   `json:"sub"`
+	Username    string   `json:"preferred_username"`
+	Email       string   `json:"email,omitempty"`
+	Role        string   `json:"role"`
+	Groups      []string `json:"groups,omitempty"`
+	Permissions []string `json:"permissions,omitempty"`
+	Issuer      string   `json:"iss"`
+	Audience    string   `json:"aud"`
+	IssuedAt    int64    `json:"iat"`
+	Expires     int64    `json:"exp"`
+	JTI         string   `json:"jti"`
 }
 
 // TokenIssuer 持有签名私钥与验签公钥。零值不可用，需经 NewTokenIssuerFromEnv。
@@ -160,6 +162,7 @@ func (t *TokenIssuer) sign(u User, audience string) (string, string, time.Time, 
 	jti := base64.RawURLEncoding.EncodeToString(jtiBytes)
 	claims := Claims{
 		Subject: u.ID, Username: u.Username, Email: u.Email, Role: u.Role,
+		Groups: u.Groups, Permissions: u.Permissions,
 		Issuer: t.issuer, Audience: audience,
 		IssuedAt: now.Unix(), Expires: exp.Unix(), JTI: jti,
 	}
@@ -294,7 +297,8 @@ func ClaimsToUser(c *Claims) *User {
 	if c == nil {
 		return nil
 	}
-	return &User{ID: c.Subject, Username: c.Username, Email: c.Email, Role: c.Role}
+	// 组与权限随令牌下发：下游服务本地验签即可判定能力；权限变更最迟在令牌续期时生效。
+	return &User{ID: c.Subject, Username: c.Username, Email: c.Email, Role: c.Role, Groups: c.Groups, Permissions: c.Permissions}
 }
 
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }

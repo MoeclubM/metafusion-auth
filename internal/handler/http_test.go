@@ -109,21 +109,25 @@ func TestJWKSExposesSigningKey(t *testing.T) {
 	}
 }
 
-// 准入能力端点：当前没有注册/邀请/邮件验证实现，必须如实返回关闭。
-func TestAuthSettingsReportsRealCapabilities(t *testing.T) {
+// 准入能力端点：读到的是实例设置的持久化结果，默认全部关闭（fail-closed）。
+// 邮件验证通道未接入，故 email_verification_enabled 恒为 false。
+func TestAuthSettingsDefaultsAreClosed(t *testing.T) {
 	r, _ := newTestServer(t)
 	w := do(t, r, http.MethodGet, "/api/auth/settings", "")
 	if w.Code != 200 {
 		t.Fatalf("状态码 %d", w.Code)
 	}
-	var got map[string]bool
+	var got map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
 	for _, k := range []string{"registration_enabled", "invite_required", "require_email_verification", "email_verification_enabled"} {
-		if got[k] {
-			t.Fatalf("%s 应为 false（尚无对应实现）", k)
+		if v, ok := got[k]; !ok || v != false {
+			t.Fatalf("%s 应为 false，实际 %v", k, v)
 		}
+	}
+	if got["registration_default_groups"] == nil {
+		t.Fatal("缺少 registration_default_groups：注册默认组应是可配置事实，而不是写死在注册代码里")
 	}
 }
 

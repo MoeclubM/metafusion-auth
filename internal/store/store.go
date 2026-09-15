@@ -10,11 +10,17 @@ import (
 )
 
 // User 是账号的对外投影；password_hash 永不出现在 JSON 里。
+//
+// Groups/Permissions 是权限组的投影：Groups 是组码，Permissions 是展开后的权限码集合。
+// 两者随 /auth/me 与访问令牌下发，各子系统据此判定自己的能力；role 是历史兼容字段
+// （admin/editor/user），由组成员关系推导，保留给尚未接入权限码的旧代码。
 type User struct {
-	ID       string `json:"id"`
-	Username string `json:"username"`
-	Email    string `json:"email"`
-	Role     string `json:"role"`
+	ID          string   `json:"id"`
+	Username    string   `json:"username"`
+	Email       string   `json:"email"`
+	Role        string   `json:"role"`
+	Groups      []string `json:"groups,omitempty"`
+	Permissions []string `json:"permissions,omitempty"`
 }
 
 // Store 组合数据库与令牌签发器：签发器为 nil 时退化为纯查库模式，
@@ -58,6 +64,36 @@ CREATE TABLE IF NOT EXISTS auth.oauth_tokens (
 -- 会让管理台把角色设成 user 时失败。这里只放宽取值集合，不会让既有数据失效。
 ALTER TABLE auth.users DROP CONSTRAINT IF EXISTS users_role_check;
 ALTER TABLE auth.users ADD CONSTRAINT users_role_check CHECK (role IN ('user','editor','admin'));
+-- 实例设置：注册开关、邀请码强度、限流参数等。键值对存放，未知键由应用层拒绝。
+CREATE TABLE IF NOT EXISTS auth.instance_settings (
+ key text PRIMARY KEY, value jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now()
+);
+-- 邀请码：可限次、可过期、可吊销；invite_uses 记录"谁用哪个码进来的"。
+CREATE TABLE IF NOT EXISTS auth.invites (
+ code text PRIMARY KEY, created_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+ note text NOT NULL DEFAULT '', max_uses int NOT NULL DEFAULT 1 CHECK (max_uses > 0),
+ used_count int NOT NULL DEFAULT 0 CHECK (used_count >= 0),
+ revoked boolean NOT NULL DEFAULT false, expires_at timestamptz,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS auth.invite_uses (
+ invite_code text NOT NULL REFERENCES auth.invites(code) ON DELETE CASCADE,
+ user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+ used_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (invite_code, user_id)
+);
+-- 权限组：一份权限码集合 + 四语名。权限码的含义由各子系统自己解释（见 access.go 注释）。
+CREATE TABLE IF NOT EXISTS auth.groups (
+ id uuid PRIMARY KEY, code text NOT NULL UNIQUE CHECK (code ~ '^[a-z][a-z0-9_-]{1,63}$'),
+ names jsonb NOT NULL DEFAULT '{}'::jsonb, descriptions jsonb NOT NULL DEFAULT '{}'::jsonb,
+ permissions text[] NOT NULL DEFAULT '{}', is_system boolean NOT NULL DEFAULT false,
+ sort_order int NOT NULL DEFAULT 0, created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS auth.user_groups (
+ user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+ group_id uuid NOT NULL REFERENCES auth.groups(id) ON DELETE CASCADE,
+ granted_by uuid, granted_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY (user_id, group_id)
+);
 `
 
 // seedClients 是第一方 OAuth 客户端的种子：这三个客户端原先由目录服务在启动时写入
@@ -93,8 +129,10 @@ func (s *Store) Init(ctx context.Context) error {
 	if _, err := s.DB.ExecContext(ctx, schema); err != nil {
 		return err
 	}
-	_, err := s.DB.ExecContext(ctx, seedClients)
-	return err
+	if _, err := s.DB.ExecContext(ctx, seedClients); err != nil {
+		return err
+	}
+	return s.seedGroups(ctx)
 }
 
 // Authenticate 是账号校验的唯一入口：无状态 RS256 验签优先，失败回退查库。
