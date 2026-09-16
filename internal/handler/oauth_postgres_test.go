@@ -30,7 +30,8 @@ func TestOAuthChainAgainstPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer st.Close()
+	// 收尾要删账号与客户端，注册成 t.Cleanup 才能排在它们之后（defer 会先把连接关掉，删除静默失败）。
+	t.Cleanup(func() { st.Close() })
 	if err := st.Init(ctx); err != nil {
 		t.Fatalf("init schema: %v", err)
 	}
@@ -217,9 +218,7 @@ func insertChainUser(t *testing.T, ctx context.Context, st *store.Store, role st
 	if _, err := st.DB.ExecContext(ctx, "INSERT INTO auth.users(id,username,email,password_hash,role) VALUES($1,$2,$3,$4,$5)", id, name, name+"@example.test", string(hash), role); err != nil {
 		t.Fatalf("插入测试账号: %v", err)
 	}
-	t.Cleanup(func() {
-		_, _ = st.DB.ExecContext(context.Background(), "DELETE FROM auth.users WHERE id=$1", id)
-	})
+	t.Cleanup(func() { testutil.DeleteUser(t, st.DB, id) })
 	token, _, err := st.Login(ctx, name, chainTestPassword)
 	if err != nil {
 		t.Fatalf("登录测试账号: %v", err)

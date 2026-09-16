@@ -26,7 +26,8 @@ func TestOAuthServerAgainstPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	// 收尾要删账号与客户端，注册成 t.Cleanup 才能排在它们之后（defer 会先把连接关掉，删除静默失败）。
+	t.Cleanup(func() { s.Close() })
 	// Init 幂等：这里同时验证 scopes / disabled / jti 三个增量列与审计表能在既有库上补上。
 	if err := s.Init(ctx); err != nil {
 		t.Fatalf("init schema: %v", err)
@@ -279,8 +280,6 @@ func seedOAuthTestUser(t *testing.T, ctx context.Context, s *Store) string {
 	if _, err := s.DB.ExecContext(ctx, "INSERT INTO auth.users(id,username,email,password_hash,role) VALUES($1,$2,$3,$4,'user')", id, name, name+"@example.test", string(hash)); err != nil {
 		t.Fatalf("插入测试账号: %v", err)
 	}
-	t.Cleanup(func() {
-		_, _ = s.DB.ExecContext(context.Background(), "DELETE FROM auth.users WHERE id=$1", id)
-	})
+	t.Cleanup(func() { testutil.DeleteUser(t, s.DB, id) })
 	return id
 }

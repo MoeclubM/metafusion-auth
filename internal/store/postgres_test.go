@@ -33,7 +33,7 @@ func newTestIssuer(t *testing.T) *TokenIssuer {
 }
 
 // 需要真实 PostgreSQL 的回归：初始化 → 首管 → 登录/续期 → 改密 → 角色变更 → 全量登出。
-// 未设置 AUTH_TEST_DSN 时整体跳过。测试库会被清空 auth.users（连接串已强制要求独立测试库）。
+// 未设置 AUTH_TEST_DSN 时整体跳过。测试库会被清空账号数据（连接串已强制要求独立测试库）。
 func TestIdentityLifecycleAgainstPostgres(t *testing.T) {
 	dsn := testutil.DSN(t)
 	db := testutil.Database(t)
@@ -47,9 +47,10 @@ func TestIdentityLifecycleAgainstPostgres(t *testing.T) {
 	if err = s.Init(ctx); err != nil {
 		t.Fatalf("init schema: %v", err)
 	}
-	if _, err = db.ExecContext(ctx, "DELETE FROM auth.users"); err != nil {
-		t.Fatalf("clean users: %v", err)
-	}
+	// 首管用例要求库里没有账号：先按外键顺序清掉会话等引用行（串行跑时 handler 包会留下会话行）。
+	// 收尾再清一次，用例建的账号不留给下一次运行（db 比 store 连接更晚关闭）。
+	testutil.ResetAccounts(t, db)
+	t.Cleanup(func() { testutil.ResetAccounts(t, db) })
 	s.Tokens = newTestIssuer(t)
 
 	// 首管：只需一次，重复调用必须被拒（防止并发初始化出两个管理员）。
