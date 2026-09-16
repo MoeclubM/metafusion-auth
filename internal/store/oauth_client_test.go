@@ -124,6 +124,9 @@ func TestCanManageOAuth(t *testing.T) {
 		t.Fatal("* 通配应可管理")
 	}
 	if !canManageOAuth(&User{ID: "u1", Role: "admin"}) {
-		t.Fatal("历史 role=admin（老令牌不带 permissions）应可管理")
+		t.Fatal("历史 role=admin（老令牌不带 permissions 声明）应可管理")
+	}
+	if canManageOAuth(&User{ID: "u1", Role: "admin", Permissions: []string{"community.post.create"}}) {
+		t.Fatal("带 permissions 声明的令牌只认码：role=admin 不再额外放行")
 	}
 }

@@ -5,6 +5,7 @@ package handler
 // 切流时前端与第三方客户端都不需要改动；两个入口的发现文档内容完全相同。
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,8 +16,31 @@ import (
 	"github.com/MoeclubM/metafusion-auth/internal/store"
 )
 
+// oauthStore 是 OAuth 端点依赖的存储能力。生产实现是 *store.Store（New 里注入）；
+// 抽成接口是为了让"authorize → 同意页 → 授权码 → 令牌 → userinfo"整条链路能在
+// 没有数据库的环境里用 httptest 跑完（本仓库默认测试环境没有 PostgreSQL）。
+type oauthStore interface {
+	ListOAuthClients(ctx context.Context) ([]store.OAuthClient, error)
+	GetOAuthClient(ctx context.Context, id string) (*store.OAuthClient, error)
+	CreateOAuthCode(ctx context.Context, clientID string, userID string, redirectURI, requestedScope, challenge, method string) (string, string, error)
+	ExchangeOAuthCode(ctx context.Context, clientID, clientSecret, code, redirectURI, verifier string) (store.OAuthGrant, error)
+	OAuthUserinfo(ctx context.Context, token string) (*store.User, string, error)
+	IDToken(u store.User, clientID string) (string, int64, error)
+	RecordOAuthAudit(ctx context.Context, entry store.OAuthAuditEntry) error
+	CreateOAuthClient(ctx context.Context, in store.OAuthClientInput, actor *store.User) (store.OAuthClient, string, error)
+	UpdateOAuthClient(ctx context.Context, id string, in store.OAuthClientInput, actor *store.User) (store.OAuthClient, error)
+	RotateOAuthClientSecret(ctx context.Context, id string, actor *store.User) (store.OAuthClient, string, error)
+	DeleteOAuthClient(ctx context.Context, id string, actor *store.User) error
+	RevokeOAuthTokensByClient(ctx context.Context, clientID string, actor *store.User) (int, error)
+	RevokeOAuthTokensByUser(ctx context.Context, userID string, actor *store.User) (int, error)
+	ListOAuthAudits(ctx context.Context, clientID string, limit int) ([]store.OAuthAuditEntry, error)
+}
+
+// 生产实现必须是 *store.Store：接口与实现一旦对不上，这里先编译失败。
+var _ oauthStore = (*store.Store)(nil)
+
 func (h *Handler) registerOAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
-	s := h.store
+	s := h.oauth
 	oauth := api.Group("/oauth")
 	// 客户端列表不含密钥哈希（SecretHash json:"-"），但仍需登录后可读，
 	// 避免匿名枚举 client_id/redirect_uris。
@@ -30,6 +54,7 @@ func (h *Handler) registerOAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		responseType := c.Query("response_type")
 		state := c.Query("state")
 		rawScope := c.Query("scope")
+		consent := c.Query("consent")
 		if responseType != "code" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported_response_type"})
 			return
@@ -42,7 +67,7 @@ func (h *Handler) registerOAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 			return
 		}
 		client, err := s.GetOAuthClient(c.Request.Context(), clientID)
-		if err != nil || client == nil {
+		if err != nil || client == nil || client.Disabled {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_client"})
 			return
 		}
@@ -63,6 +88,37 @@ func (h *Handler) registerOAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 				target = base + "?return_to=" + url.QueryEscape(c.Request.RequestURI)
 			}
 			c.Redirect(http.StatusFound, target)
+			return
+		}
+		// 发码前的三方分支：
+		//   trusted 第一方 —— 跳过同意页（自动化流程不因同意页而断）；
+		//   consent=allow —— 用户在同意页点过同意；
+		//   consent=deny  —— 用户拒绝，带 error=access_denied 回回调地址；
+		//   其它（含首次进入）—— 渲染同意页，展示 client 名称、申请 scope 与将授予的权限。
+		if !client.Trusted && consent == "deny" {
+			// 拒绝路径也要留痕（写审计失败不改变"拒绝"这个结果本身）。
+			_ = s.RecordOAuthAudit(c.Request.Context(), store.OAuthAuditEntry{
+				ActorID: u.ID, SubjectID: u.ID, ClientID: client.ID,
+				Action: store.OAuthActionConsentDeny, Scopes: granted, Detail: redirectURI,
+			})
+			c.Redirect(http.StatusFound, oauthRedirect(redirectURI, [][2]string{{"error", "access_denied"}, {"state", state}}))
+			return
+		}
+		if !client.Trusted && consent != "allow" {
+			h.renderConsent(c, client, granted)
+			return
+		}
+		action := store.OAuthActionConsentAllow
+		if client.Trusted {
+			action = store.OAuthActionTrustedAllow
+		}
+		// 同意结果先落审计再发码：写失败即拒绝授权——"谁把哪些 scope 授给了谁"
+		// 是这次授权唯一的凭据，不能出现"码发了但查不到同意记录"。
+		if err := s.RecordOAuthAudit(c.Request.Context(), store.OAuthAuditEntry{
+			ActorID: u.ID, SubjectID: u.ID, ClientID: client.ID,
+			Action: action, Scopes: granted, Detail: redirectURI,
+		}); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "audit_failed"})
 			return
 		}
 		code, _, err := s.CreateOAuthCode(c.Request.Context(), clientID, u.ID, redirectURI, store.FormatScopes(granted), c.Query("code_challenge"), c.Query("code_challenge_method"))

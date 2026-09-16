@@ -164,17 +164,9 @@ var clientIDRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{2,63}$`)
 // ValidClientID 校验客户端 id 形状：小写字母开头，后续为小写字母/数字/_/-。
 func ValidClientID(id string) bool { return clientIDRe.MatchString(strings.TrimSpace(id)) }
 
-// canManageOAuth 与 HTTP 层 requirePermission 的口径一致：权限码、* 通配，
-// 或历史 role=admin（老令牌不带 permissions 声明）。
-func canManageOAuth(actor *User) bool {
-	if actor == nil {
-		return false
-	}
-	if actor.Role == "admin" {
-		return true
-	}
-	return HasPermission(actor.Permissions, "auth.oauth.manage")
-}
+// canManageOAuth 与 HTTP 层 requirePermission("auth.oauth.manage") 同源（store.Can）：
+// 令牌带 permissions 时一律以码为准，只有完全没有权限声明的老令牌才按历史 role=admin 兜底。
+func canManageOAuth(actor *User) bool { return Can(actor, "auth.oauth.manage") }
 
 // ValidateRedirectURIs 校验回调白名单：每一条都必须是 http(s) 绝对地址，
 // 不接受通配符、片段（#）与内嵌凭据——通配会让任何子域或任何路径都能收码。
@@ -540,6 +532,12 @@ func (s *Store) CreateOAuthCode(ctx context.Context, clientID string, userID str
 		return "", "", err
 	}
 	return code, scope, nil
+}
+
+// VerifyPKCE 按 RFC 7636 校验 verifier。导出是因为内存实现（handler 的测试替身）
+// 必须用同一份判定，不能在两边各写一套 PKCE 规则。
+func VerifyPKCE(method, challenge, verifier string) bool {
+	return verifyPKCE(method, challenge, verifier)
 }
 
 // verifyPKCE 按 RFC 7636 校验 verifier：S256 比较 BASE64URL(SHA256(verifier))，
