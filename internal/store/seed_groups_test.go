@@ -198,6 +198,118 @@ func seedGroupByCode(t *testing.T, code string) seedGroup {
 	return seedGroup{}
 }
 
+// TestMemberGroupHoldsUploadPermission 钉住"上传码由 member 组默认持有"这一契约的两半：
+// 种子里确实声明了它（否则新装实例的成员无法上传），且拼写与权限码清单逐字一致
+// （存储服务按字符串比对码名，拼错一个字就是"收口了但没人有权限"）。
+func TestMemberGroupHoldsUploadPermission(t *testing.T) {
+	const code = "storage.asset.upload"
+	member := seedGroupByCode(t, "member")
+	if !containsString(member.perms, code) {
+		t.Fatalf("member 组应默认持有 %s，实际 %v", code, member.perms)
+	}
+	if !containsString(member.perms, "community.post.create") {
+		t.Errorf("member 组原有的 community.post.create 不应被顶掉: %v", member.perms)
+	}
+	found := false
+	for _, item := range PermissionCatalog() {
+		if item.Code == code {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("权限码清单里没有 %s：码名必须与 storage 侧 auth.PermissionAssetUpload 逐字一致", code)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestSeedGroupPermissionBackfillIsAdditive 钉住权限回填的"只加不减"：
+// 补种子声明而库里缺失的码；手工加过的码与既有码一律保留；无补丁时不产生写入。
+func TestSeedGroupPermissionBackfillIsAdditive(t *testing.T) {
+	member := seedGroupByCode(t, "member").perms
+	cases := []struct {
+		name  string
+		seed  []string
+		cur   []string
+		want  []string
+		added []string
+	}{
+		{
+			name:  "存量行只有社区码：补上上传码",
+			seed:  member,
+			cur:   []string{"community.post.create"},
+			want:  []string{"community.post.create", "storage.asset.upload"},
+			added: []string{"storage.asset.upload"},
+		},
+		{
+			name:  "手工加过的码保留，缺失的种子码补在后面",
+			seed:  member,
+			cur:   []string{"catalog.entity.edit"},
+			want:  []string{"catalog.entity.edit", "community.post.create", "storage.asset.upload"},
+			added: []string{"community.post.create", "storage.asset.upload"},
+		},
+		{
+			name:  "库里已有种子声明的全部码：无补丁（幂等）",
+			seed:  member,
+			cur:   []string{"storage.asset.upload", "community.post.create"},
+			want:  []string{"storage.asset.upload", "community.post.create"},
+			added: nil,
+		},
+		{
+			name:  "库里多出种子没有的码：原样保留",
+			seed:  member,
+			cur:   []string{"community.post.create", "storage.asset.upload", "custom.code"},
+			want:  []string{"community.post.create", "storage.asset.upload", "custom.code"},
+			added: nil,
+		},
+		{
+			name:  "通配 * 已覆盖全部权限：不再补具体码",
+			seed:  member,
+			cur:   []string{"*"},
+			want:  []string{"*"},
+			added: nil,
+		},
+		{
+			name:  "空权限：按种子顺序全补",
+			seed:  member,
+			cur:   nil,
+			want:  member,
+			added: member,
+		},
+		{
+			name:  "重复码只保留一次",
+			seed:  []string{"storage.asset.upload"},
+			cur:   []string{"storage.asset.upload", "storage.asset.upload"},
+			want:  []string{"storage.asset.upload"},
+			added: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, added := backfillPermissions(tc.seed, tc.cur)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("回填结果 = %v，期望 %v", got, tc.want)
+			}
+			if !reflect.DeepEqual(added, tc.added) {
+				t.Fatalf("补丁清单 = %v，期望 %v", added, tc.added)
+			}
+			// 只增不减：库里原有的码一个都不能少。
+			for _, code := range tc.cur {
+				if !containsString(got, code) {
+					t.Fatalf("原有权限码 %s 被回填删除", code)
+				}
+			}
+		})
+	}
+}
+
 // ── 真库回填 ──
 
 // TestSeedGroupLocaleBackfillAgainstPostgres 用一次性库证明回填真的落库：
@@ -236,9 +348,15 @@ func TestSeedGroupLocaleBackfillAgainstPostgres(t *testing.T) {
 		`{"zh-CN": "普通成员（人工）", "en-US": "Regular member (edited)"}`); err != nil {
 		t.Fatalf("造改过英文名的行: %v", err)
 	}
-	// 管理员改过的权限不得被播种覆盖。
+	// 旧版播种形状：member 组那时只有社区码（没有 storage.asset.upload）。
+	// 这一行才让下面"member 持有上传码"的断言真的落在**回填**上，而不是落在新建 INSERT 上。
 	if _, err := s.DB.ExecContext(ctx,
-		"UPDATE auth.groups SET permissions='{community.post.create}'::text[] WHERE code='community_moderator'"); err != nil {
+		"UPDATE auth.groups SET permissions='{community.post.create}'::text[] WHERE code='member'"); err != nil {
+		t.Fatalf("造旧版 member 权限: %v", err)
+	}
+	// 管理员手工加过一个码：回填必须保留它，同时把该组种子里声明而库里缺的码补齐。
+	if _, err := s.DB.ExecContext(ctx,
+		"UPDATE auth.groups SET permissions='{catalog.entity.edit}'::text[] WHERE code='community_moderator'"); err != nil {
 		t.Fatalf("造自定义权限行: %v", err)
 	}
 
@@ -275,9 +393,20 @@ func TestSeedGroupLocaleBackfillAgainstPostgres(t *testing.T) {
 	if member.descs["ja-JP"] != seedGroupByCode(t, "member").desc["ja-JP"] {
 		t.Errorf("描述缺的日文未补齐: %v", member.descs)
 	}
+	// 权限回填是"只加不减"：手工加过的码留着，种子里缺的码补上，谁也没被删。
 	mod := readGroupRow(t, s, ctx, "community_moderator")
-	if mod.perms != "community.post.create" {
-		t.Errorf("管理员改过的权限被播种覆盖: %q", mod.perms)
+	if !strings.Contains(mod.perms, "catalog.entity.edit") {
+		t.Errorf("管理员手工加过的权限码被回填弄丢: %q", mod.perms)
+	}
+	for _, want := range seedGroupByCode(t, "community_moderator").perms {
+		if !strings.Contains(mod.perms, want) {
+			t.Errorf("种子里声明的码 %s 未补进存量行: %q", want, mod.perms)
+		}
+	}
+	// 升级前"任何登录用户都能上传"对应的是 member 组持有 storage.asset.upload：
+	// 存储侧同批收口后，存量实例的成员靠这次回填保住上传能力。
+	if !strings.Contains(member.perms, "storage.asset.upload") {
+		t.Errorf("member 组未获得 storage.asset.upload: %q", member.perms)
 	}
 
 	// 幂等：这一轮没有任何可补的语种、is_system 也已正确，因此不该发 UPDATE。

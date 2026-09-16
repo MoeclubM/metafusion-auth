@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/lib/pq"
 )
 
 type seedGroup struct {
@@ -59,7 +61,9 @@ func systemGroups() []seedGroup {
 			code:  "member",
 			names: map[string]string{"zh-CN": "注册成员", "zh-TW": "註冊成員", "ja-JP": "登録メンバー", "en-US": "Member"},
 			desc:  map[string]string{"zh-CN": "普通注册用户：可浏览、收藏、发帖，不具编辑权", "zh-TW": "一般註冊使用者：可瀏覽、收藏、發帖，不具編輯權", "ja-JP": "一般登録ユーザー：閲覧・お気に入り・投稿が可能。編集権限はなし", "en-US": "Regular member: browse, favorite and post, no editing rights"},
-			perms: []string{"community.post.create"}, order: 100,
+			// storage.asset.upload 是「创建并登记自己的资产」：收口前后成员都能上传，
+			// 这里显式声明它，才能让存量实例通过下面的权限回填补齐（收紧要另改本种子或改用自定义组）。
+			perms: []string{"community.post.create", "storage.asset.upload"}, order: 100,
 		},
 	}
 }
@@ -123,12 +127,53 @@ func backfillNameLocales(seed, cur map[string]string) (map[string]string, []stri
 	return out, added
 }
 
+// backfillPermissions 把种子声明、而库里缺失的权限码补进现有组（只加不减）：
+//
+//   - 库里已有的码全部保留，含管理员手工加过的：本函数不删任何码；
+//   - 种子里有、库里没有的码追加到末尾，顺序稳定（先库里原序，再按种子顺序）；
+//   - 库里带 `*` 通配时不再补具体码：通配已覆盖全部权限，补了只是噪音。
+//
+// 返回合并结果与本次补入的码；没有补入时 added 为空，调用方据此跳过 UPDATE（幂等判据）。
+//
+// 为什么需要它：新增权限码（例如 storage.asset.upload 开始被存储服务的写接口强制）时，
+// 存量实例的组里不会有这个码，服务侧一收口就会把原本能用的成员挡在外面；
+// 这里随启动把种子声明的码补齐，让升级前后行为一致，再谈收紧。
+//
+// 已知取舍（与定义种子的"只增不改"同一取舍）：种子声明过的码被管理员移除后，下次启动会被补回。
+// 要长期收紧某个种子码，改的是种子本身（或把用户改挂到不声明该码的自定义组），
+// 而不是靠后台移除——否则每次重启都会反复。
+func backfillPermissions(seed, cur []string) ([]string, []string) {
+	out := make([]string, 0, len(cur)+len(seed))
+	seen := make(map[string]bool, len(cur)+len(seed))
+	for _, code := range cur {
+		if seen[code] {
+			continue
+		}
+		seen[code] = true
+		out = append(out, code)
+	}
+	if seen[WildcardPermission] {
+		return out, nil
+	}
+	var added []string
+	for _, code := range seed {
+		if seen[code] {
+			continue
+		}
+		seen[code] = true
+		out = append(out, code)
+		added = append(added, code)
+	}
+	return out, added
+}
+
 // seedGroups 幂等播种系统组，读后写都在同一事务里（write 已取账号服务的 advisory 锁，
 // 并发启动不会两边同时判定"库里没有"）：
 //
 //   - 库里没有该组 → 整条插入（名称/描述/权限/排序都来自种子）；
-//   - 已存在 → 只补 is_system 标记与缺失/仍是英文占位的语种名（names 与 descriptions 都补），
-//     管理员改过的权限、排序与已有译文一律不动；
+//   - 已存在 → 只补 is_system 标记、缺失/仍是英文占位的语种名（names 与 descriptions 都补），
+//     以及种子声明而库里缺失的权限码（只加不减，见 backfillPermissions）；
+//     管理员手工加过的码、排序与已有译文一律不动；
 //   - 没有任何要补的东西时不发 UPDATE。
 //
 // 只有 systemGroups() 里的系统组走这条路径，后台自建的组不会被回填。
@@ -145,9 +190,10 @@ func (s *Store) seedGroups(ctx context.Context) error {
 
 func seedSystemGroup(ctx context.Context, tx *sql.Tx, g seedGroup) error {
 	var rawNames, rawDescs []byte
+	var curPerms []string
 	var isSystem bool
-	err := tx.QueryRowContext(ctx, "SELECT names,descriptions,is_system FROM auth.groups WHERE code=$1", g.code).
-		Scan(&rawNames, &rawDescs, &isSystem)
+	err := tx.QueryRowContext(ctx, "SELECT names,descriptions,permissions,is_system FROM auth.groups WHERE code=$1", g.code).
+		Scan(&rawNames, &rawDescs, pq.Array(&curPerms), &isSystem)
 	if errors.Is(err, sql.ErrNoRows) {
 		names, err := jsonMarshal(g.names)
 		if err != nil {
@@ -170,11 +216,12 @@ func seedSystemGroup(ctx context.Context, tx *sql.Tx, g seedGroup) error {
 
 	names, addedNames := backfillNameLocales(g.names, decodeNames(rawNames))
 	descs, addedDescs := backfillNameLocales(g.desc, decodeNames(rawDescs))
+	perms, addedPerms := backfillPermissions(g.perms, curPerms)
 
 	// 只写真正变化的列：旧行缺 is_system 时补标记，语种有补丁时才写该列的整张表
 	// （补丁是"当前表 + 种子译文"，所以不会动其它语种）。
-	set := make([]string, 0, 3)
-	args := make([]any, 0, 3)
+	set := make([]string, 0, 4)
+	args := make([]any, 0, 4)
 	if !isSystem {
 		set = append(set, "is_system=true")
 	}
@@ -193,6 +240,10 @@ func seedSystemGroup(ctx context.Context, tx *sql.Tx, g seedGroup) error {
 		}
 		args = append(args, raw)
 		set = append(set, fmt.Sprintf("descriptions=$%d", len(args)))
+	}
+	if len(addedPerms) > 0 {
+		args = append(args, pq.Array(perms))
+		set = append(set, fmt.Sprintf("permissions=$%d", len(args)))
 	}
 	if len(set) == 0 {
 		return nil
