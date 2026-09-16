@@ -19,14 +19,15 @@ func (s *Store) User(ctx context.Context, token string) (*User, error) {
 	h := sessionHash(token)
 	var u User
 	err := s.DB.QueryRowContext(ctx, "SELECT u.id,u.username,COALESCE(u.email,''),u.role FROM auth.sessions s JOIN auth.users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now()", h).Scan(&u.ID, &u.Username, &u.Email, &u.Role)
-	if err == nil {
-		return &u, nil
+	if err != nil {
+		err = s.DB.QueryRowContext(ctx, "SELECT u.id,u.username,COALESCE(u.email,''),u.role FROM auth.oauth_tokens t JOIN auth.users u ON u.id=t.user_id WHERE t.token_hash=$1 AND t.expires_at>now()", h).Scan(&u.ID, &u.Username, &u.Email, &u.Role)
 	}
-	err = s.DB.QueryRowContext(ctx, "SELECT u.id,u.username,COALESCE(u.email,''),u.role FROM auth.oauth_tokens t JOIN auth.users u ON u.id=t.user_id WHERE t.token_hash=$1 AND t.expires_at>now()", h).Scan(&u.ID, &u.Username, &u.Email, &u.Role)
 	if err != nil {
 		return &u, err
 	}
-	// 查库路径同样补齐组与权限：不补齐会让"令牌验签失败但会话有效"的请求在管理台被 403。
+	// 两条查库路径都必须补齐组与权限：访问令牌过期（AccessTokenTTL）后请求回退到这里，
+	// 而 permissions 是唯一授权来源——漏掉就会让"role 仍是 user、权限全来自自定义组"的
+	// 成员在令牌过期那一刻丢掉全部能力（管理台入口消失、端点 403），续期路径却还有权限。
 	if err := s.WithAccess(ctx, &u); err != nil {
 		return &u, err
 	}
