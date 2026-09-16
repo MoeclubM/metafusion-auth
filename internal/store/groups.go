@@ -124,7 +124,9 @@ func (s *Store) CreateGroup(ctx context.Context, in Group, actor *User) (Group, 
 	}
 	g := Group{ID: uuid.NewString(), Code: code, Names: in.Names, Descriptions: in.Descriptions, Permissions: in.Permissions, SortOrder: in.SortOrder}
 	if len(g.Names) == 0 {
-		g.Names = map[string]string{"zh-CN": code, "en-US": code}
+		// 占位名是语言中立的组码，四语同值（见 defaultGroupNames）：缺 zh-TW/ja-JP 键时
+		// 那两种语言也会回退到同一个串，所以显示文字不变，只是名称表结构与其它定义一致。
+		g.Names = defaultGroupNames(code)
 	}
 	if g.Permissions == nil {
 		g.Permissions = []string{}
