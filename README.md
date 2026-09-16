@@ -6,8 +6,8 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 
 ## 职责边界
 
-- **拥有**：`auth.users`、`auth.sessions`、`auth.oauth_clients`、`auth.oauth_codes`、`auth.oauth_tokens`
-  与 RSA 密钥（令牌签发/注销/JWKS）。
+- **拥有**：`auth.users`、`auth.sessions`、`auth.oauth_clients`、`auth.oauth_codes`、`auth.oauth_tokens`、
+  `auth.oauth_audit` 与 RSA 密钥（令牌签发/注销/JWKS）。
 - **对外**：签发短期 RS256 访问令牌（15 分钟）+ 服务端会话轮转（refresh），并提供 JWKS 供其他服务本地验签。
 - **不拥有**：实体元数据（目录服务）、文件（存储服务）、论坛与互动记录（互动服务）。
   其他服务只验签、不查本服务的库；本服务也不读它们的库。
@@ -28,14 +28,66 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 | POST | `/api/auth/logout-all` | 令牌 | 吊销该用户全部会话 |
 | GET/POST | `/api/admin/users` | 管理员 | 账号列表 / 创建账号（默认角色 `editor`） |
 | PUT | `/api/admin/users/{id}/role`、`/api/admin/users/{id}/password` | 管理员 | 改角色（`user/editor/admin`，不得降级最后一个管理员）/ 重置密码 |
-| GET | `/api/oauth/clients` | 登录 | OAuth 客户端列表（不含密钥哈希） |
-| GET | `/api/oauth/authorize` | 登录 | 授权码流程（PKCE `S256`/`plain`，redirect_uri 白名单校验） |
-| POST | `/api/oauth/token` | 匿名 | 授权码换令牌，另签发 `id_token`（aud 指向客户端） |
-| GET | `/api/oauth/userinfo` | 令牌 | OIDC 用户信息 |
+| GET | `/api/oauth/clients` | 登录 | OAuth 客户端列表（不含密钥哈希；响应形状与切流前逐字一致） |
+| GET | `/api/oauth/authorize` | 登录 | 授权码流程：校验 client 与 redirect_uri 白名单、校验并收敛 scope；已登录但未表态时渲染同意页，`consent=allow` 才发码，`consent=deny` 带 `error=access_denied` 回跳；`trusted` 客户端跳过同意页。PKCE 支持 `S256`/`plain` |
+| POST | `/api/oauth/token` | 匿名 | 授权码换令牌（表单或 JSON），响应含收敛后的 `scope`、真实 `expires_in` 与 `id_token`（aud 指向客户端） |
+| GET | `/api/oauth/userinfo` | 令牌 | OIDC 用户信息（以 `auth.oauth_tokens` 的存活行为准，令牌被吊销/客户端停用后立即 401） |
+| GET/POST | `/api/admin/oauth/clients` | `auth.oauth.manage` | 管理面客户端列表（`items`）/ 创建（返回一次性明文密钥，库里只存 bcrypt 哈希） |
+| PUT/DELETE | `/api/admin/oauth/clients/{id}` | `auth.oauth.manage` | 更新（改名 / 回调白名单 / scope 白名单 / trusted / 停用）/ 删除（第一方种子客户端不可删） |
+| POST | `/api/admin/oauth/clients/{id}/rotate-secret` | `auth.oauth.manage` | 轮换密钥：明文只返回一次，老密钥立即失效 |
+| POST | `/api/admin/oauth/clients/{id}/revoke-tokens`、`/api/admin/users/{id}/revoke-oauth-tokens` | `auth.oauth.manage` | 吊销未过期令牌（连未兑换的授权码一起作废），按客户端或按用户 |
+| GET | `/api/admin/oauth/audits` | `auth.oauth.manage` | 授权审计（同意/拒绝与客户端管理动作，可按 `client_id` 过滤） |
 | GET | `/api/.well-known/openid-configuration`、`/.well-known/openid-configuration` | 匿名 | OIDC 发现文档（两个入口同一份内容，地址取自 issuer） |
 | GET | `/api/oidc/jwks`、`/.well-known/jwks.json` | 匿名 | 验签公钥（JWKS） |
 
 限流：认证写入类接口按 IP 固定窗口 15 次/分钟，超限返回 429 与 `Retry-After`。
+
+## OAuth 授权方（同意、scope 与吊销）
+
+**同意页是服务端渲染 HTML**（`internal/handler/consent.go`），不跳账号前端页面：
+
+- 授权请求本身就是浏览器顶层跳转，页面随本服务发布：第三方站点与本地开发端口行为一致，
+  也不受前端站点是否可达影响；本次改动不涉及主仓库前端（不需要新增页面与路由）；
+- 同意页展示 client 名称与 ID、`redirect_uri`（让用户看清会跳回哪里）以及请求的 scope 与
+  将授予的权限说明；按钮是两条普通链接（在同一个授权请求上追加 `consent=allow` / `consent=deny`），
+  页面无脚本无表单，响应头带 `Content-Security-Policy: default-src 'none'`、
+  `X-Frame-Options: DENY`、`Cache-Control: no-store`；
+- 会话 Cookie 是 `SameSite=Strict`，跨站发起的请求根本不带会话，因此不存在"别的站点替你点同意"的 CSRF 面；
+- 文案四语齐备（`Accept-Language` 选语言，匹配不到回落 `en-US`，不拿中文兜底）；
+  新增受支持的 scope 必须同步补四语说明，用例会拦住漏项。
+
+`client.trusted=true` 的第一方客户端跳过同意页直接发码，第一方自动化流程不因同意页中断。
+
+**scope**：受支持集合是 `openid`、`profile`、`email`（发现文档 `scopes_supported` 与它同源）。
+请求里出现不支持的 scope 直接 `invalid_scope`（错误体点明是哪一项），其余按
+**「客户端白名单 ∩ 请求」**收敛；发码与换码各收敛一次（管理员中途收紧白名单，令牌只会更少），
+令牌响应里的 `scope` 就是最终授予的集合。`auth.oauth_clients.scopes` 是每个客户端自己的白名单，
+存量行按列默认值补齐全部三种，行为与拆分前一致。
+
+**令牌有效期与续期**：访问令牌是 15 分钟 RS256 JWT（`expires_in` 报真实值）；
+未配置签发器时退化为不透明令牌（30 天，`expires_in` 为 2592000，兼容旧口径）。
+本服务**不签发 `refresh_token`**：
+
+- 第一方前端的续期走 `POST /api/auth/refresh` + 服务端会话轮转，本来就不需要 `refresh_token`；
+- 第三方走授权码 + PKCE，令牌到期后重新走一次授权：用户仍处于登录态，
+  `trusted` 客户端连同意页都不会出现；**当前访问令牌有效期 15 分钟，到期需要重新授权**；
+- 再引入一套 `refresh_token` 会同时带来"两套续期"和"两套吊销语义"，与既有设计冲突。
+  将来若要做，前提是把 refresh 令牌并入同一套吊销表，并明确轮转与 TTL。
+
+**吊销**：`POST /api/admin/oauth/clients/{id}/revoke-tokens`（按客户端）与
+`POST /api/admin/users/{id}/revoke-oauth-tokens`（按用户）删除 `auth.oauth_tokens` 中未过期的行、
+作废尚未兑换的授权码，并把 jti 放进进程内注销集合；`userinfo` 以存活行为准，因此吊销或停用后立即 401。
+
+- **限制（如实说明）**：其他服务用 JWKS 本地验签的无状态令牌无法被即时撤销，只能等这 15 分钟自然过期——
+  这是无状态 JWT 的固有性质；需要即时撤销时应改为回调本服务的 `userinfo`（introspection 未实现）。
+- 按用户吊销只动第三方令牌，不删该用户自己的服务端会话（那是 `/api/auth/logout-all` 的职责）。
+
+**审计**：`auth.oauth_audit` 记录 `consent_allow` / `consent_deny` / `trusted_allow` 与客户端
+创建、更新、轮换、删除、`tokens_revoked`，含 actor、client_id、scope 与时间。同意动作在发码**之前**写入，
+写失败即拒绝授权（不允许出现"码发了却查不到同意记录"）。
+
+**接口形状**：管理面客户端列表返回 `items`（沿用管理台约定），登录可读的 `/api/oauth/clients`
+仍返回 `clients`，两者都保留；客户端对象新增 `scopes`、`disabled` 字段（追加，不改既有字段）。
 
 ## 令牌与密钥
 
@@ -57,6 +109,9 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
   与建表同一处：这三个客户端原先由目录服务在启动时写入，账号拆出后随 schema 一起搬进来，
   `ON CONFLICT DO NOTHING` 保护后台改过的配置。目录服务现在**不再创建、也不再写入任何 auth 对象**。
 - 该服务**没有版本化迁移**：建表语句即当前终态，改动需同时更新冻结用例。
+- 本轮新增的列与表都以 `ADD COLUMN IF NOT EXISTS` / `CREATE TABLE IF NOT EXISTS` 写在 `Init` 里
+  （`oauth_clients.scopes`、`oauth_clients.disabled`、`oauth_tokens.jti`、`auth.oauth_audit`），
+  老库启动即补齐，不需要手工迁移；冻结值同步在 `schema_parity_test.go` 与 `schema_lifecycle_parity_test.go`。
 
 ## 环境变量
 
@@ -74,6 +129,17 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 go run cmd/server/main.go
 go test ./... && go vet ./...
 ```
+
+## 已知缺口与待定
+
+- **不签发 `refresh_token`**（理由见上）：第三方访问令牌 15 分钟到期后需要重新授权；
+  是否给第三方单独放宽 TTL 属产品决策，当前未放宽。
+- **`userinfo` 不按 scope 裁剪声明**：仍返回既有字段集合（`sub`/`id`/`username`/`role`/`email`），
+  保持向后兼容；"只授 `openid` 时不返回 email"这类最小化未实现。
+- **同意不记忆、也没有授权列表页**：每次授权都会重新询问（`trusted` 客户端除外）；
+  用户自查"我给过哪些站点授权"的接口未实现（审计表已有数据，缺读取入口给终端用户）。
+- **没有 introspection / RFC 7009 撤销端点**：下游本地验签的令牌无法即时撤销（见上）。
+- **jti 注销集合是单实例内存实现**：多副本部署需要共享状态（Redis 集合），当前未支持。
 
 ## 迁移状态
 
