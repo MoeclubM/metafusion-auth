@@ -127,7 +127,9 @@ func (h *Handler) registerOAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "missing_token"})
 			return
 		}
-		u, err := s.Authenticate(c.Request.Context(), token)
+		// 以 auth.oauth_tokens 的**存活行**为准（吊销 / 客户端停用即时生效），
+		// 没有该行时回退服务端会话，保持"登录令牌也能调 userinfo"的既有行为。
+		u, _, err := s.OAuthUserinfo(c.Request.Context(), token)
 		if err != nil || u == nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid_token"})
 			return

@@ -33,6 +33,7 @@ var frozenTableDefs = map[string]map[string]string{
 		"redirect_uris": "redirect_uris text[] not null default '{}'",
 		"scopes":        "scopes text[] not null default '{openid,profile,email}'",
 		"trusted":       "trusted boolean not null default false",
+		"disabled":      "disabled boolean not null default false",
 		"created_at":    "created_at timestamptz not null default now()",
 	},
 	"auth.oauth_codes": {
@@ -52,6 +53,7 @@ var frozenTableDefs = map[string]map[string]string{
 		"user_id":    "user_id uuid not null references auth.users(id) on delete cascade",
 		"scope":      "scope text not null default 'profile'",
 		"expires_at": "expires_at timestamptz not null",
+		"jti":        "jti text not null default ''",
 	},
 }
 

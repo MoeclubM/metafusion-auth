@@ -45,6 +45,16 @@ var frozenLifecycleTableDefs = map[string]map[string]string{
 		"user_id":     "user_id uuid not null references auth.users(id) on delete cascade",
 		"used_at":     "used_at timestamptz not null default now()",
 	},
+	"auth.oauth_audit": {
+		"id":              "id uuid primary key",
+		"actor_user_id":   "actor_user_id uuid references auth.users(id) on delete set null",
+		"subject_user_id": "subject_user_id uuid references auth.users(id) on delete set null",
+		"client_id":       "client_id text not null default ''",
+		"action":          "action text not null",
+		"scopes":          "scopes text[] not null default '{}'",
+		"detail":          "detail text not null default ''",
+		"created_at":      "created_at timestamptz not null default now()",
+	},
 }
 
 func TestSchemaMatchesLifecycleShape(t *testing.T) {

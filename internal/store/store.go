@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS auth.oauth_clients (
 -- 客户端的 scope 白名单：授权时收敛成「这份白名单 ∩ 请求」。老行按默认值补齐三种 scope，
 -- 保持拆分前"不传 scope 也拿到 profile"的行为不变。
 ALTER TABLE auth.oauth_clients ADD COLUMN IF NOT EXISTS scopes text[] NOT NULL DEFAULT '{openid,profile,email}';
+-- 停用的客户端不能再发起授权、也不能用已有令牌取用户信息（行还在，但不可用）。
+ALTER TABLE auth.oauth_clients ADD COLUMN IF NOT EXISTS disabled boolean NOT NULL DEFAULT false;
 CREATE TABLE IF NOT EXISTS auth.oauth_codes (
  code text PRIMARY KEY, client_id text NOT NULL REFERENCES auth.oauth_clients(id) ON DELETE CASCADE,
  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -62,6 +64,18 @@ CREATE TABLE IF NOT EXISTS auth.oauth_tokens (
  token_hash text PRIMARY KEY, client_id text NOT NULL REFERENCES auth.oauth_clients(id) ON DELETE CASCADE,
  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
  scope text NOT NULL DEFAULT 'profile', expires_at timestamptz NOT NULL
+);
+-- 签发时的 jti：吊销整批令牌时用它把已签发的无状态 JWT 在本进程内立即作废
+-- （库里只有哈希，没有 jti 就无法把"批量的行"映射回令牌）。
+ALTER TABLE auth.oauth_tokens ADD COLUMN IF NOT EXISTS jti text NOT NULL DEFAULT '';
+-- OAuth 审计：同意/拒绝与客户端管理动作。client_id 故意不建外键——客户端删掉之后
+-- 这份记录必须还在，否则审计就失去意义。
+CREATE TABLE IF NOT EXISTS auth.oauth_audit (
+ id uuid PRIMARY KEY, actor_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+ subject_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+ client_id text NOT NULL DEFAULT '', action text NOT NULL,
+ scopes text[] NOT NULL DEFAULT '{}', detail text NOT NULL DEFAULT '',
+ created_at timestamptz NOT NULL DEFAULT now()
 );
 -- 角色取值与主仓库迁移 000010 的终态对齐：早期库只有 editor/admin 两值，
 -- 会让管理台把角色设成 user 时失败。这里只放宽取值集合，不会让既有数据失效。
