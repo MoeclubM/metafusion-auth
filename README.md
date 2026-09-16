@@ -14,20 +14,29 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 
 ## HTTP 契约
 
-路径与请求/响应形状与主仓库 `catalog` 包逐字一致，切流时前端与第三方客户端都不需要改动。
+账号服务是这些路径的唯一实现；路径与请求/响应形状保持切流前不变，前端与第三方客户端不需要改动（主仓库的账号实现与路由已删除，见文末「迁移状态」）。
 
 | 方法 | 路径 | 鉴权 | 说明 |
 | --- | --- | --- | --- |
 | GET/POST | `/api/setup` | 首次初始化 | 检查是否仍需初始化首管 / 创建首个管理员（已有用户则拒绝 `setup_complete`） |
 | POST | `/api/auth/login` | 匿名 | 用户名+密码换取令牌，同时下发 HttpOnly Cookie `mf_session` |
+| POST | `/api/auth/register` | 匿名 | 自助注册：受实例设置约束（开放注册 + 可选邀请码，见 `/api/auth/settings`）；成功即签发令牌并下发 Cookie |
 | POST | `/api/auth/refresh` | 令牌 | 用当前 Bearer/Cookie 换发新令牌（服务端轮转会话行，无需独立 refresh_token） |
 | GET | `/api/auth/me` | 令牌 | 当前账号 |
 | POST | `/api/auth/logout` | 令牌 | 注销当前会话并清 Cookie |
-| GET | `/api/auth/settings` | 匿名 | 实例准入能力（当前无注册/邀请/邮件验证实现，如实返回关闭） |
+| GET | `/api/auth/settings` | 匿名 | 实例准入能力：注册/邀请等设置的**持久化结果**（不是代码常量）；`require_email_verification` 恒为 false（邮件通道未接入） |
+| GET/POST | `/api/auth/invite` | 令牌 | 个人邀请页：我的邀请码台账与由我邀请进来的人（`items`/`members`/`can_create`）/ 新建邀请码（`note`/`max_uses`/`expires_in_days`） |
 | PUT | `/api/auth/password`、POST `/api/auth/change-password` | 令牌 | 修改自己的密码（`old_password`/`new_password`） |
 | POST | `/api/auth/logout-all` | 令牌 | 吊销该用户全部会话 |
 | GET/POST | `/api/admin/users` | 管理员 | 账号列表 / 创建账号（默认角色 `editor`） |
 | PUT | `/api/admin/users/{id}/role`、`/api/admin/users/{id}/password` | 管理员 | 改角色（`user/editor/admin`，不得降级最后一个管理员）/ 重置密码 |
+| PUT | `/api/admin/users/{id}/groups` | `auth.users.manage` | 设置该用户的权限组（`groups` 整组替换） |
+| GET/PUT | `/api/admin/settings` | `auth.settings.manage` | 实例设置的读取与局部更新（管理台用） |
+| GET/POST | `/api/admin/invites` | `auth.invites.manage` | 邀请码台账（`items`）/ 新建 |
+| POST | `/api/admin/invites/{code}/revoke` | `auth.invites.manage` | 作废邀请码 |
+| GET/POST | `/api/admin/groups` | `auth.groups.manage` | 权限组列表（`items`）/ 新建 |
+| PUT/DELETE | `/api/admin/groups/{code}` | `auth.groups.manage` | 更新 / 删除权限组 |
+| GET | `/api/admin/permissions` | `auth.groups.manage` | 权限码清单（`items`），供管理台按域展示可授予的码 |
 | GET | `/api/oauth/clients` | 登录 | OAuth 客户端列表（不含密钥哈希；响应形状与切流前逐字一致） |
 | GET | `/api/oauth/authorize` | 登录 | 授权码流程：校验 client 与 redirect_uri 白名单、校验并收敛 scope；已登录但未表态时渲染同意页，`consent=allow` 才发码，`consent=deny` 带 `error=access_denied` 回跳；`trusted` 客户端跳过同意页。PKCE 支持 `S256`/`plain` |
 | POST | `/api/oauth/token` | 匿名 | 授权码换令牌（表单或 JSON），响应含收敛后的 `scope`、真实 `expires_in` 与 `id_token`（aud 指向客户端） |

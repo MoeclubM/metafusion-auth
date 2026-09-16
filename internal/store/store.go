@@ -30,7 +30,7 @@ type Store struct {
 	Tokens *TokenIssuer
 }
 
-// schema 与主仓库 backend/internal/catalog/schema.sql 的 auth 部分同一定义，
+// schema 是 auth schema 的唯一来源（主仓库曾经的 schema.sql 已随迁移基线收敛删除），
 // 幂等；账号服务自己保证首次启动即可用，不依赖目录服务的初始化顺序。
 const schema = `
 CREATE SCHEMA IF NOT EXISTS auth;
@@ -123,8 +123,8 @@ CREATE TABLE IF NOT EXISTS auth.user_groups (
 `
 
 // seedClients 是第一方 OAuth 客户端的种子：这三个客户端原先由目录服务在启动时写入
-// （`schema.sql` + `Store.Initialize`）。账号拆出后 auth schema 归本服务所有，
-// 种子随之搬到这里，目录侧不再往这个 schema 写任何一行。
+// （目录侧当时的 `schema.sql` 加 `Store.Initialize`，该文件已随迁移基线收敛删除）。
+// 账号拆出后 auth schema 归本服务所有，种子随之搬到这里，目录侧不再往这个 schema 写任何一行。
 //
 // 语义与迁移过来的那份逐字一致：secret_hash 为空表示"受信任的第一方，允许无密钥"，
 // redirect_uris 覆盖线上域名与本地开发端口，ON CONFLICT 保护后台改过的配置不被覆盖。
