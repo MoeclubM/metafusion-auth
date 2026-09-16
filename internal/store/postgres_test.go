@@ -81,6 +81,17 @@ func TestIdentityLifecycleAgainstPostgres(t *testing.T) {
 		t.Fatalf("验签身份不一致: %+v err=%v", who, err)
 	}
 
+	// 访问令牌过期后请求会回退到 s.User（查库）：这条路径必须与 Login/Refresh 一样
+	// 补齐组与权限，否则"role 仍是 user、权限全来自自定义组"的成员会在令牌过期那一刻
+	// 丢掉全部能力。s.User 就是回退路径本身，直接调用与回退时的行为逐字一致。
+	dbUser, err := s.User(ctx, token)
+	if err != nil {
+		t.Fatalf("回退查库: %v", err)
+	}
+	if len(dbUser.Groups) == 0 || !HasPermission(dbUser.Permissions, "*") {
+		t.Fatalf("回退查库的身份未补齐组与权限: groups=%v permissions=%v", dbUser.Groups, dbUser.Permissions)
+	}
+
 	// 改密：旧密码错必须拒绝；改成功后旧密码失效、新密码可用。
 	if err = s.ChangePassword(ctx, admin.ID, "wrong-secret", "second-admin-secret"); err == nil {
 		t.Fatal("旧密码错误时必须拒绝")
