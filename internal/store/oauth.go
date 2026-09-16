@@ -142,17 +142,45 @@ func RedirectURIAllowed(allowed []string, redirectURI string) bool {
 	return false
 }
 
+// ValidateHomepageURL 校验应用主页：空串表示没填（可选字段）；非空时必须是 http(s) 绝对地址，
+// 不接受内嵌凭据——它会被渲染成同意页与开发者中心里的可点链接。
+func ValidateHomepageURL(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
+		return fmt.Errorf("invalid_homepage_url: %s", raw)
+	}
+	return nil
+}
+
+// ValidateClientDescription 校验应用简介长度：与客户名一样按**字符数**（不是字节数）计，
+// 否则中文简介会被莫名其妙地判超长。
+func ValidateClientDescription(desc string) error {
+	if len([]rune(strings.TrimSpace(desc))) > 500 {
+		return fmt.Errorf("invalid_client_description")
+	}
+	return nil
+}
+
 // ── 客户端管理（管理台，受 auth.oauth.manage 保护）──
 
-// OAuthClientInput 是管理 API 的写入形状。字段用指针区分「没传」与「传了零值」：
-// 更新接口只改传了的字段（改名 / 白名单 / scope / trusted / 启停各改各的）。
+// OAuthClientInput 是管理 API 与开发者中心的写入形状。字段用指针区分「没传」与「传了零值」：
+// 更新接口只改传了的字段（改名 / 简介 / 主页 / 白名单 / scope / trusted / verified / 启停各改各的）。
+// 开发者中心只允许前五项：管理面字段（trusted / disabled / verified）传了会被明确拒绝，
+// 不是静默忽略——静默忽略会让开发者以为自己的应用已被信任。
 type OAuthClientInput struct {
 	ID           string    `json:"client_id"`
 	Name         *string   `json:"name"`
+	Description  *string   `json:"description"`
+	HomepageURL  *string   `json:"homepage_url"`
 	RedirectURIs *[]string `json:"redirect_uris"`
 	Scopes       *[]string `json:"scopes"`
 	Trusted      *bool     `json:"trusted"`
 	Disabled     *bool     `json:"disabled"`
+	Verified     *bool     `json:"verified"`
 }
 
 // seededClientIDs 是第一方种子客户端：Init 每次启动都按 id 复活它们，
@@ -235,12 +263,19 @@ func normalizeStrings(in []string) []string {
 	return out
 }
 
-// CreateOAuthClient 创建客户端并**只返回一次**明文 secret；client_id 未指定时随机生成。
-// 回调地址、scope 白名单在写库前全部校验，避免登记出一个永远拿不到令牌的客户端。
+// CreateOAuthClient 是管理台的客户端创建入口（要求 auth.oauth.manage）：可登记受信任的自有平台
+// 与已核验应用。开发者自助登记走 CreateDeveloperApp，两者共用下面同一份实现与校验。
 func (s *Store) CreateOAuthClient(ctx context.Context, in OAuthClientInput, actor *User) (OAuthClient, string, error) {
 	if !canManageOAuth(actor) {
 		return OAuthClient{}, "", fmt.Errorf("forbidden")
 	}
+	return s.createOAuthClient(ctx, in, actor, "", true)
+}
+
+// createOAuthClient 是管理台与开发者中心的共同实现：ownerID 非空表示该应用归属这个用户。
+// privileged=false（开发者自建）时管理面字段一律落零值——否则开发者只要在请求体里塞一个
+// trusted=true 就能跳过同意页，等于把"自有平台"的身份交给请求方自己声明。
+func (s *Store) createOAuthClient(ctx context.Context, in OAuthClientInput, actor *User, ownerID string, privileged bool) (OAuthClient, string, error) {
 	id := strings.TrimSpace(in.ID)
 	if id == "" {
 		gen, err := generateClientID()
@@ -259,6 +294,19 @@ func (s *Store) CreateOAuthClient(ctx context.Context, in OAuthClientInput, acto
 	if name == "" || len([]rune(name)) > 120 {
 		return OAuthClient{}, "", fmt.Errorf("invalid_client_name")
 	}
+	description, homepage := "", ""
+	if in.Description != nil {
+		description = strings.TrimSpace(*in.Description)
+	}
+	if err := ValidateClientDescription(description); err != nil {
+		return OAuthClient{}, "", err
+	}
+	if in.HomepageURL != nil {
+		homepage = strings.TrimSpace(*in.HomepageURL)
+	}
+	if err := ValidateHomepageURL(homepage); err != nil {
+		return OAuthClient{}, "", err
+	}
 	scopes := append([]string{}, SupportedScopes...)
 	if in.Scopes != nil {
 		scopes = normalizeStrings(*in.Scopes)
@@ -273,8 +321,12 @@ func (s *Store) CreateOAuthClient(ctx context.Context, in OAuthClientInput, acto
 	if err := ValidateRedirectURIs(uris); err != nil {
 		return OAuthClient{}, "", err
 	}
-	trusted := in.Trusted != nil && *in.Trusted
-	disabled := in.Disabled != nil && *in.Disabled
+	trusted, disabled, verified := false, false, false
+	if privileged {
+		trusted = in.Trusted != nil && *in.Trusted
+		disabled = in.Disabled != nil && *in.Disabled
+		verified = in.Verified != nil && *in.Verified
+	}
 	secret, err := GenerateClientSecret()
 	if err != nil {
 		return OAuthClient{}, "", err
@@ -283,13 +335,15 @@ func (s *Store) CreateOAuthClient(ctx context.Context, in OAuthClientInput, acto
 	if err != nil {
 		return OAuthClient{}, "", err
 	}
-	client := OAuthClient{ID: id, Name: name, RedirectURIs: uris, Scopes: scopes, Trusted: trusted, Disabled: disabled, CreatedAt: time.Now().UTC().Format(time.RFC3339)}
+	// SecretHash 一并回填（json 标签是 "-"，不会进响应）：开发者中心靠它给出 has_secret，
+	// 否则刚登记完的应用会被显示成"没有密钥"。
+	client := OAuthClient{ID: id, SecretHash: hash, Name: name, Description: description, HomepageURL: homepage, RedirectURIs: uris, Scopes: scopes, Trusted: trusted, Disabled: disabled, Verified: verified, OwnerID: ownerID, CreatedAt: time.Now().UTC().Format(time.RFC3339)}
 	err = s.write(ctx, func(tx *sql.Tx) error {
 		var exists bool
 		if err := tx.QueryRowContext(ctx, "SELECT true FROM auth.oauth_clients WHERE id=$1", client.ID).Scan(&exists); err == nil {
 			return fmt.Errorf("client_exists")
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO auth.oauth_clients(id, secret_hash, name, redirect_uris, scopes, trusted, disabled) VALUES($1,$2,$3,$4,$5,$6,$7)", client.ID, hash, client.Name, pq.Array(client.RedirectURIs), pq.Array(client.Scopes), client.Trusted, client.Disabled); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO auth.oauth_clients(id, secret_hash, name, description, homepage_url, redirect_uris, scopes, trusted, disabled, verified, owner_user_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)", client.ID, hash, client.Name, client.Description, client.HomepageURL, pq.Array(client.RedirectURIs), pq.Array(client.Scopes), client.Trusted, client.Disabled, client.Verified, nullableUUID(ownerID)); err != nil {
 			return err
 		}
 		return recordOAuthAuditTx(ctx, tx, actor.ID, "", client.ID, OAuthActionClientCreate, client.Scopes, client.Name)
@@ -300,14 +354,24 @@ func (s *Store) CreateOAuthClient(ctx context.Context, in OAuthClientInput, acto
 	return client, secret, nil
 }
 
-// UpdateOAuthClient 部分更新：只改传了的字段，并逐项做与创建时相同的校验。
+// UpdateOAuthClient 是管理台的客户端更新入口（要求 auth.oauth.manage），可改管理面字段。
 func (s *Store) UpdateOAuthClient(ctx context.Context, id string, in OAuthClientInput, actor *User) (OAuthClient, error) {
 	if !canManageOAuth(actor) {
 		return OAuthClient{}, fmt.Errorf("forbidden")
 	}
+	return s.updateOAuthClient(ctx, id, in, actor, true, nil)
+}
+
+// updateOAuthClient 是管理台与开发者中心的共同实现：只改传了的字段，并逐项做与创建时相同的校验。
+// check 在行锁内拿到当前客户端（含 owner 与 trusted），归属判定与更新因此是同一个原子动作，
+// 不会出现"判定时还是我的、更新时已易主"。
+func (s *Store) updateOAuthClient(ctx context.Context, id string, in OAuthClientInput, actor *User, privileged bool, check func(*OAuthClient) error) (OAuthClient, error) {
 	id = strings.TrimSpace(id)
 	if !ValidClientID(id) {
 		return OAuthClient{}, fmt.Errorf("invalid_client_id")
+	}
+	if !privileged && (in.Trusted != nil || in.Disabled != nil || in.Verified != nil) {
+		return OAuthClient{}, fmt.Errorf("invalid_field: app_managed_fields")
 	}
 	sets := []string{}
 	args := []any{}
@@ -324,6 +388,20 @@ func (s *Store) UpdateOAuthClient(ctx context.Context, id string, in OAuthClient
 		}
 		add("name", name)
 	}
+	if in.Description != nil {
+		description := strings.TrimSpace(*in.Description)
+		if err := ValidateClientDescription(description); err != nil {
+			return OAuthClient{}, err
+		}
+		add("description", description)
+	}
+	if in.HomepageURL != nil {
+		homepage := strings.TrimSpace(*in.HomepageURL)
+		if err := ValidateHomepageURL(homepage); err != nil {
+			return OAuthClient{}, err
+		}
+		add("homepage_url", homepage)
+	}
 	if in.RedirectURIs != nil {
 		uris := normalizeStrings(*in.RedirectURIs)
 		if err := ValidateRedirectURIs(uris); err != nil {
@@ -338,16 +416,26 @@ func (s *Store) UpdateOAuthClient(ctx context.Context, id string, in OAuthClient
 		}
 		add("scopes", pq.Array(scopes))
 	}
-	if in.Trusted != nil {
-		add("trusted", *in.Trusted)
-	}
-	if in.Disabled != nil {
-		add("disabled", *in.Disabled)
+	if privileged {
+		if in.Trusted != nil {
+			add("trusted", *in.Trusted)
+		}
+		if in.Disabled != nil {
+			add("disabled", *in.Disabled)
+		}
+		if in.Verified != nil {
+			add("verified", *in.Verified)
+		}
 	}
 	err := s.write(ctx, func(tx *sql.Tx) error {
-		var exists bool
-		if err := tx.QueryRowContext(ctx, "SELECT true FROM auth.oauth_clients WHERE id=$1 FOR UPDATE", id).Scan(&exists); err != nil {
-			return fmt.Errorf("client_not_found")
+		current, err := lockedClient(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if check != nil {
+			if err := check(current); err != nil {
+				return err
+			}
 		}
 		if len(sets) == 0 {
 			return nil
@@ -369,6 +457,16 @@ func (s *Store) UpdateOAuthClient(ctx context.Context, id string, in OAuthClient
 	return *client, nil
 }
 
+// lockedClient 在事务里按 id 锁定并读出一个客户端的最小投影（归属 + 可展示字段），
+// 供更新 / 轮换 / 删除这类"先判归属再动手"的路径复用。行不存在时返回 client_not_found。
+func lockedClient(ctx context.Context, tx *sql.Tx, id string) (*OAuthClient, error) {
+	var c OAuthClient
+	if err := tx.QueryRowContext(ctx, "SELECT id, name, COALESCE(owner_user_id::text,''), trusted FROM auth.oauth_clients WHERE id=$1 FOR UPDATE", id).Scan(&c.ID, &c.Name, &c.OwnerID, &c.Trusted); err != nil {
+		return nil, fmt.Errorf("client_not_found")
+	}
+	return &c, nil
+}
+
 // RotateOAuthClientSecret 轮换密钥：写入新哈希并返回一次性明文。老密钥立即失效
 // （库里只有哈希，没有回滚路径）；对「无密钥的第一方」轮换后该客户端必须开始带
 // client_secret 才换得到令牌，运维需同步更新对端配置。
@@ -376,6 +474,10 @@ func (s *Store) RotateOAuthClientSecret(ctx context.Context, id string, actor *U
 	if !canManageOAuth(actor) {
 		return OAuthClient{}, "", fmt.Errorf("forbidden")
 	}
+	return s.rotateOAuthClientSecret(ctx, id, actor, nil)
+}
+
+func (s *Store) rotateOAuthClientSecret(ctx context.Context, id string, actor *User, check func(*OAuthClient) error) (OAuthClient, string, error) {
 	id = strings.TrimSpace(id)
 	if !ValidClientID(id) {
 		return OAuthClient{}, "", fmt.Errorf("invalid_client_id")
@@ -389,12 +491,17 @@ func (s *Store) RotateOAuthClientSecret(ctx context.Context, id string, actor *U
 		return OAuthClient{}, "", err
 	}
 	err = s.write(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, "UPDATE auth.oauth_clients SET secret_hash=$1 WHERE id=$2", hash, id)
+		current, err := lockedClient(ctx, tx, id)
 		if err != nil {
 			return err
 		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return fmt.Errorf("client_not_found")
+		if check != nil {
+			if err := check(current); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE auth.oauth_clients SET secret_hash=$1 WHERE id=$2", hash, id); err != nil {
+			return err
 		}
 		return recordOAuthAuditTx(ctx, tx, actor.ID, "", id, OAuthActionClientRotate, nil, "")
 	})
@@ -408,12 +515,16 @@ func (s *Store) RotateOAuthClientSecret(ctx context.Context, id string, actor *U
 	return *client, secret, nil
 }
 
-// DeleteOAuthClient 删除客户端：授权码与令牌随外键级联删除，已签发的 jti 一并作废。
+// DeleteOAuthClient 删除客户端（管理台入口）：授权码与令牌随外键级联删除，已签发的 jti 一并作废。
 // 种子客户端拒绝删除（见 seededClientIDs）；审计行保留，删客户端不抹痕迹。
 func (s *Store) DeleteOAuthClient(ctx context.Context, id string, actor *User) error {
 	if !canManageOAuth(actor) {
 		return fmt.Errorf("forbidden")
 	}
+	return s.deleteOAuthClient(ctx, id, actor, nil)
+}
+
+func (s *Store) deleteOAuthClient(ctx context.Context, id string, actor *User, check func(*OAuthClient) error) error {
 	id = strings.TrimSpace(id)
 	for _, seeded := range seededClientIDs {
 		if seeded == id {
@@ -422,11 +533,16 @@ func (s *Store) DeleteOAuthClient(ctx context.Context, id string, actor *User) e
 	}
 	var issued []revokedToken
 	err := s.write(ctx, func(tx *sql.Tx) error {
-		var name string
-		if err := tx.QueryRowContext(ctx, "SELECT name FROM auth.oauth_clients WHERE id=$1 FOR UPDATE", id).Scan(&name); err != nil {
-			return fmt.Errorf("client_not_found")
+		current, err := lockedClient(ctx, tx, id)
+		if err != nil {
+			return err
 		}
-		var err error
+		if check != nil {
+			if err := check(current); err != nil {
+				return err
+			}
+		}
+		name := current.Name
 		if issued, err = issuedTokensFor(ctx, tx, "client_id", id); err != nil {
 			return err
 		}
@@ -442,50 +558,69 @@ func (s *Store) DeleteOAuthClient(ctx context.Context, id string, actor *User) e
 	return nil
 }
 
+// OAuthClient 是客户端的对外投影：SecretHash 永不出现在 JSON 里（json:"-"）。
+// Verified 是核验状态（自有平台恒为已核验，见 DeveloperApp）；自己人是第一方还是第三方，
+// 由 FirstParty 判定，不靠调用方猜 trusted 的含义。
 type OAuthClient struct {
 	ID           string   `json:"client_id"`
 	SecretHash   string   `json:"-"`
 	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	HomepageURL  string   `json:"homepage_url"`
 	RedirectURIs []string `json:"redirect_uris"`
 	Scopes       []string `json:"scopes"`
 	Trusted      bool     `json:"trusted"`
 	Disabled     bool     `json:"disabled"`
+	Verified     bool     `json:"verified"`
+	OwnerID      string   `json:"owner_user_id,omitempty"`
+	Owner        string   `json:"owner_username,omitempty"`
 	CreatedAt    string   `json:"created_at"`
 }
 
+// FirstParty 判定"自有平台"：受信任（免同意）的客户端只能是平台自己登记的。
+// 开发者中心自建的应用永远拿不到 trusted，因此这个判定不会把第三方的应用认成自家的。
+func (c OAuthClient) FirstParty() bool { return c.Trusted }
+
+// clientColumns 是客户端投影的列清单：列表、详情与开发者中心共用一份，避免三处形状漂移。
+const clientColumns = "c.id, c.secret_hash, c.name, c.description, c.homepage_url, c.redirect_uris, c.scopes, c.trusted, c.disabled, c.verified, COALESCE(c.owner_user_id::text,''), COALESCE(u.username,''), c.created_at"
+
+// scanClient 按 clientColumns 的顺序读一行（列表与详情共用）。
+func scanClient(row interface{ Scan(...any) error }) (OAuthClient, error) {
+	var c OAuthClient
+	var uris, scopes []string
+	var created time.Time
+	if err := row.Scan(&c.ID, &c.SecretHash, &c.Name, &c.Description, &c.HomepageURL, pq.Array(&uris), pq.Array(&scopes), &c.Trusted, &c.Disabled, &c.Verified, &c.OwnerID, &c.Owner, &created); err != nil {
+		return c, err
+	}
+	c.RedirectURIs = uris
+	c.Scopes = scopes
+	c.CreatedAt = created.UTC().Format(time.RFC3339)
+	return c, nil
+}
+
 func (s *Store) ListOAuthClients(ctx context.Context) ([]OAuthClient, error) {
-	rows, err := s.DB.QueryContext(ctx, "SELECT id, name, redirect_uris, scopes, trusted, disabled, created_at FROM auth.oauth_clients ORDER BY id")
+	rows, err := s.DB.QueryContext(ctx, "SELECT "+clientColumns+" FROM auth.oauth_clients c LEFT JOIN auth.users u ON u.id=c.owner_user_id ORDER BY c.id")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var list []OAuthClient
 	for rows.Next() {
-		var c OAuthClient
-		var uris, scopes []string
-		var t time.Time
-		if err := rows.Scan(&c.ID, &c.Name, pq.Array(&uris), pq.Array(&scopes), &c.Trusted, &c.Disabled, &t); err != nil {
+		c, err := scanClient(rows)
+		if err != nil {
 			return nil, err
 		}
-		c.RedirectURIs = uris
-		c.Scopes = scopes
-		c.CreatedAt = t.UTC().Format(time.RFC3339)
 		list = append(list, c)
 	}
 	return list, rows.Err()
 }
 
 func (s *Store) GetOAuthClient(ctx context.Context, id string) (*OAuthClient, error) {
-	var c OAuthClient
-	var uris, scopes []string
-	var t time.Time
-	err := s.DB.QueryRowContext(ctx, "SELECT id, secret_hash, name, redirect_uris, scopes, trusted, disabled, created_at FROM auth.oauth_clients WHERE id=$1", strings.TrimSpace(id)).Scan(&c.ID, &c.SecretHash, &c.Name, pq.Array(&uris), pq.Array(&scopes), &c.Trusted, &c.Disabled, &t)
+	row := s.DB.QueryRowContext(ctx, "SELECT "+clientColumns+" FROM auth.oauth_clients c LEFT JOIN auth.users u ON u.id=c.owner_user_id WHERE c.id=$1", strings.TrimSpace(id))
+	c, err := scanClient(row)
 	if err != nil {
 		return nil, err
 	}
-	c.RedirectURIs = uris
-	c.Scopes = scopes
-	c.CreatedAt = t.UTC().Format(time.RFC3339)
 	return &c, nil
 }
 

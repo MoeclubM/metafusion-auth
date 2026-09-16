@@ -52,6 +52,15 @@ CREATE TABLE IF NOT EXISTS auth.oauth_clients (
 ALTER TABLE auth.oauth_clients ADD COLUMN IF NOT EXISTS scopes text[] NOT NULL DEFAULT '{openid,profile,email}';
 -- 停用的客户端不能再发起授权、也不能用已有令牌取用户信息（行还在，但不可用）。
 ALTER TABLE auth.oauth_clients ADD COLUMN IF NOT EXISTS disabled boolean NOT NULL DEFAULT false;
+-- 开发者中心：第三方应用的归属与展示字段。owner 为空即"平台登记"（自有平台，或管理员代第三方登记），
+-- 归属判定只比对一个 id，不必再建映射表；应用删除时归属行随 ON DELETE SET NULL 解绑，
+-- 审计记录（oauth_audit）不受影响。
+ALTER TABLE auth.oauth_clients ADD COLUMN IF NOT EXISTS owner_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE auth.oauth_clients ADD COLUMN IF NOT EXISTS description text NOT NULL DEFAULT '';
+ALTER TABLE auth.oauth_clients ADD COLUMN IF NOT EXISTS homepage_url text NOT NULL DEFAULT '';
+-- 核验状态：第三方在开发者中心自建后为 false，同意页会显示"未核验应用"提示；管理员核验后置 true。
+-- 自有平台（trusted=true）的免同意本身就是最强的"已核验"表达，展示上恒为已核验（见 DeveloperApp.Verified）。
+ALTER TABLE auth.oauth_clients ADD COLUMN IF NOT EXISTS verified boolean NOT NULL DEFAULT false;
 CREATE TABLE IF NOT EXISTS auth.oauth_codes (
  code text PRIMARY KEY, client_id text NOT NULL REFERENCES auth.oauth_clients(id) ON DELETE CASCADE,
  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -119,12 +128,14 @@ CREATE TABLE IF NOT EXISTS auth.user_groups (
 //
 // 语义与迁移过来的那份逐字一致：secret_hash 为空表示"受信任的第一方，允许无密钥"，
 // redirect_uris 覆盖线上域名与本地开发端口，ON CONFLICT 保护后台改过的配置不被覆盖。
+// 自有平台因此天然满足"免同意 + 已核验"（trusted/verified 同置 true），开发者中心把它们
+// 单列成一节展示；不写 owner_user_id：这一列表示"某个开发者自己登记的应用"。
 const seedClients = `
-INSERT INTO auth.oauth_clients(id, secret_hash, name, redirect_uris, trusted)
+INSERT INTO auth.oauth_clients(id, secret_hash, name, redirect_uris, trusted, verified)
 VALUES
- ('metafusion-resources', '', 'MetaFusion 资源存储与下载管理中心', ARRAY['https://resources.findverse.cc/callback', 'http://localhost:3001/callback'], true),
- ('metafusion-forum', '', 'MetaFusion 社区论坛', ARRAY['https://forum.findverse.cc/auth/oauth2_basic/callback', 'http://localhost:4200/auth/callback'], true),
- ('metafusion-catalog', '', 'MetaFusion 元数据知识库', ARRAY['https://findverse.cc/auth/callback', 'http://localhost:3000/auth/callback'], true)
+ ('metafusion-resources', '', 'MetaFusion 资源存储与下载管理中心', ARRAY['https://resources.findverse.cc/callback', 'http://localhost:3001/callback'], true, true),
+ ('metafusion-forum', '', 'MetaFusion 社区论坛', ARRAY['https://forum.findverse.cc/auth/oauth2_basic/callback', 'http://localhost:4200/auth/callback'], true, true),
+ ('metafusion-catalog', '', 'MetaFusion 元数据知识库', ARRAY['https://findverse.cc/auth/callback', 'http://localhost:3000/auth/callback'], true, true)
 ON CONFLICT (id) DO NOTHING;`
 
 func Open(ctx context.Context, dsn string) (*Store, error) {

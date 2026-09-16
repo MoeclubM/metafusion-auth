@@ -34,6 +34,10 @@ var frozenTableDefs = map[string]map[string]string{
 		"scopes":        "scopes text[] not null default '{openid,profile,email}'",
 		"trusted":       "trusted boolean not null default false",
 		"disabled":      "disabled boolean not null default false",
+		"owner_user_id": "owner_user_id uuid references auth.users(id) on delete set null",
+		"description":   "description text not null default ''",
+		"homepage_url":  "homepage_url text not null default ''",
+		"verified":      "verified boolean not null default false",
 		"created_at":    "created_at timestamptz not null default now()",
 	},
 	"auth.oauth_codes": {
