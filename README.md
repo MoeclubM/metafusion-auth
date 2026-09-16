@@ -28,9 +28,12 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 | GET/POST | `/api/auth/invite` | 令牌 | 个人邀请页：我的邀请码台账与由我邀请进来的人（`items`/`members`/`can_create`）/ 新建邀请码（`note`/`max_uses`/`expires_in_days`） |
 | PUT | `/api/auth/password`、POST `/api/auth/change-password` | 令牌 | 修改自己的密码（`old_password`/`new_password`） |
 | POST | `/api/auth/logout-all` | 令牌 | 吊销该用户全部会话 |
-| GET/POST | `/api/admin/users` | 管理员 | 账号列表 / 创建账号（默认角色 `editor`） |
+| GET | `/api/auth/oauth-grants` | 令牌 | 我授权过的第三方应用（`items`：`client_id`/`name`/`scopes`/`active`/`last_authorized_at`/`expires_at`） |
+| DELETE | `/api/auth/oauth-grants/{client_id}` | 令牌 | 撤回**我自己**对该应用的授权（删未过期令牌与未兑换授权码，回 `{"ok":true,"revoked":N}`；只作用于本人） |
+| GET/POST | `/api/admin/users` | 管理员 | 账号列表（含 `banned`）/ 创建账号（默认角色 `editor`） |
 | PUT | `/api/admin/users/{id}/role`、`/api/admin/users/{id}/password` | 管理员 | 改角色（`user/editor/admin`，不得降级最后一个管理员）/ 重置密码 |
 | PUT | `/api/admin/users/{id}/groups` | `auth.users.manage` | 设置该用户的权限组（`groups` 整组替换） |
+| PUT | `/api/admin/users/{id}/ban` | `auth.users.manage` | 封禁 / 解封（body `{"banned":true|false}`，缺字段 400 `invalid_payload`）；封禁同时删除该用户的会话、第三方令牌与未兑换授权码，且验签立即拒绝（见「账号封禁」） |
 | GET/PUT | `/api/admin/settings` | `auth.settings.manage` | 实例设置的读取与局部更新（管理台用） |
 | GET/POST | `/api/admin/invites` | `auth.invites.manage` | 邀请码台账（`items`）/ 新建 |
 | POST | `/api/admin/invites/{code}/revoke` | `auth.invites.manage` | 作废邀请码 |
@@ -54,7 +57,9 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 | GET/PUT/DELETE | `/api/developer/apps/{id}` | 登录 + 归属 | 详情 / 局部更新（名称、简介、主页、回调白名单、scope 白名单）/ 删除；别人的应用按 404 处理 |
 | POST | `/api/developer/apps/{id}/rotate-secret` | 登录 + 归属 | 轮换该应用密钥，明文只返回一次，旧密钥立即失效 |
 
-限流：认证写入类接口按 IP 固定窗口 15 次/分钟，超限返回 429 与 `Retry-After`。
+限流：认证写入类接口按 IP 固定窗口限流，**速率与开关来自实例设置**（`auth_rate_limit_enabled` /
+`auth_rate_limit_per_minute`，默认 `true` / 15 次每分钟，即接线前的强制值）。`enabled=false` 时不计数直接放行；
+改设置立即生效（策略有 5 秒短缓存，写设置时作废）。超限返回 429 `rate_limited` 与 `Retry-After`（秒）。
 
 ## 开发者中心（应用自助登记）
 
@@ -74,6 +79,22 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 - **配额**：每个账号最多 20 个应用（`store.MaxDeveloperAppsPerUser`），超限报 `app_quota_exceeded`；
   管理员不受限（管理台代第三方登记的场景本就不该有上限）。
 - **密钥**：明文 secret 只在创建与轮换的响应里出现一次，库里只有 bcrypt 哈希，之后无处可取。
+
+## 账号封禁
+
+`auth.users.banned`（默认 `false`）由 `PUT /api/admin/users/{id}/ban` 维护，需 `auth.users.manage`。
+封禁不是"打个标记"，而是**立即失效**：
+
+- 登录：口令正确但账号被封禁 → `403` + `{"error":"account_banned"}`（与 `invalid_credentials` 区分，
+  客户端才能提示"账号已停用、联系站务"而不是让人反复猜密码）；
+- 续期：`POST /api/auth/refresh` 同样回 `account_banned`；
+- 验签：`Authenticate` 在无状态 JWT 验签通过后仍查一次封禁状态，因此手里那张 ≤15 分钟的令牌立刻作废
+  （只删库行拦不住无状态令牌）；查询结果按账号缓存 5 秒，封禁动作立即改写缓存；
+- 连带清理：删除该用户的服务端会话、第三方令牌与未兑换的授权码。
+
+护栏两条（与"不得降级最后一个管理员"同口径）：**不能封自己**（`cannot_ban_self`），
+**不能封掉最后一个还能登录的管理员**（`cannot_ban_sole_admin`，已封禁的管理员不计入剩余数量）。
+解封只需再调一次 `{"banned":false}`。
 
 ## OAuth 授权方（同意、scope 与吊销）
 
@@ -111,6 +132,10 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 `POST /api/admin/users/{id}/revoke-oauth-tokens`（按用户）删除 `auth.oauth_tokens` 中未过期的行、
 作废尚未兑换的授权码，并把 jti 放进进程内注销集合；`userinfo` 以存活行为准，因此吊销或停用后立即 401。
 
+- **用户自助撤回**：`GET /api/auth/oauth-grants` 列出"我给过哪些站点授权"，`DELETE /api/auth/oauth-grants/{client_id}`
+  撤回其中一个。它与管理面两条吊销端点的区别是**归属**：路径里没有别人的 user id，只按当前登录身份删本人
+  （`user_id + client_id`）的令牌与授权码，因此普通成员也能用；管理面端点保留（治理用，按客户端或按用户）。
+  撤回是幂等的：本来就没有有效令牌时回 `revoked:0`，列表里该应用转为 `active:false`（同意审计仍在，用户能看到"曾授权过"）。
 - **限制（如实说明）**：其他服务用 JWKS 本地验签的无状态令牌无法被即时撤销，只能等这 15 分钟自然过期——
   这是无状态 JWT 的固有性质；需要即时撤销时应改为回调本服务的 `userinfo`（introspection 未实现）。
 - 按用户吊销只动第三方令牌，不删该用户自己的服务端会话（那是 `/api/auth/logout-all` 的职责）。
@@ -172,8 +197,8 @@ AUTH_TEST_DSN='postgres://user:pw@127.0.0.1:5432/metafusion_test?sslmode=disable
   是否给第三方单独放宽 TTL 属产品决策，当前未放宽。
 - **`userinfo` 不按 scope 裁剪声明**：仍返回既有字段集合（`sub`/`id`/`username`/`role`/`email`），
   保持向后兼容；"只授 `openid` 时不返回 email"这类最小化未实现。
-- **同意不记忆、也没有授权列表页**：每次授权都会重新询问（`trusted` 客户端除外）；
-  用户自查"我给过哪些站点授权"的接口未实现（审计表已有数据，缺读取入口给终端用户）。
+- **同意不记忆**：每次授权都会重新询问（`trusted` 客户端除外）。用户已可通过
+  `GET /api/auth/oauth-grants` 自查并撤回（见「吊销」），但同意页仍不做"已授权则跳过"。
 - **没有 introspection / RFC 7009 撤销端点**：下游本地验签的令牌无法即时撤销（见上）。
 - **jti 注销集合是单实例内存实现**：多副本部署需要共享状态（Redis 集合），当前未支持。
 

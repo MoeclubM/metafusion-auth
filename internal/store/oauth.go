@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -815,8 +816,9 @@ func (s *Store) IDToken(u User, clientID string) (string, int64, error) {
 }
 
 func (s *Store) UserFromOAuthToken(ctx context.Context, token string) (*User, error) {
+	// 与 Authenticate 同口径：令牌有效不代表账号可用（封禁的账号不能借第三方令牌读 userinfo）。
 	var u User
-	err := s.DB.QueryRowContext(ctx, "SELECT u.id, u.username, COALESCE(u.email,''), u.role FROM auth.oauth_tokens t JOIN auth.users u ON u.id=t.user_id WHERE t.token_hash=$1 AND t.expires_at>now()", sessionHash(token)).Scan(&u.ID, &u.Username, &u.Email, &u.Role)
+	err := s.DB.QueryRowContext(ctx, "SELECT u.id, u.username, COALESCE(u.email,''), u.role FROM auth.oauth_tokens t JOIN auth.users u ON u.id=t.user_id WHERE t.token_hash=$1 AND NOT u.banned AND t.expires_at>now()", sessionHash(token)).Scan(&u.ID, &u.Username, &u.Email, &u.Role)
 	if err != nil {
 		return nil, err
 	}
@@ -873,6 +875,208 @@ func (s *Store) RevokeOAuthTokensByClient(ctx context.Context, clientID string, 
 func (s *Store) RevokeOAuthTokensByUser(ctx context.Context, userID string, actor *User) (int, error) {
 	userID = strings.TrimSpace(userID)
 	return s.revokeOAuthTokens(ctx, "user_id", userID, "", "user:"+userID, actor)
+}
+
+// ── 用户自助管理自己的授权 ──
+
+// AuthorizedApp 是"某个用户对某个客户端的授权"的对外投影，供设置页展示与自助撤回。
+// Active 表示当前还有未过期的令牌；LastAuthorizedAt 来自同意审计，
+// 因此"授权过、令牌已过期"的应用也会出现在列表里而不是凭空消失。
+type AuthorizedApp struct {
+	ClientID         string   `json:"client_id"`
+	Name             string   `json:"name"`
+	Scopes           []string `json:"scopes"`
+	Active           bool     `json:"active"`
+	LastAuthorizedAt string   `json:"last_authorized_at,omitempty"`
+	ExpiresAt        string   `json:"expires_at,omitempty"`
+}
+
+// ListOAuthGrants 列出该用户授权过的应用。取两份数据的并集：
+// 未过期的第三方令牌（仍在生效）与同意审计（授权过、含已到期）。
+// 只看令牌会漏掉"授权过但已过期"的应用，只看审计会漏掉同意页改造前签发的令牌。
+func (s *Store) ListOAuthGrants(ctx context.Context, userID string) ([]AuthorizedApp, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return nil, fmt.Errorf("authentication_required")
+	}
+	type acc struct {
+		name    string
+		scopes  map[string]bool
+		active  bool
+		lastAt  time.Time
+		expires time.Time
+	}
+	grants := map[string]*acc{}
+	touch := func(clientID string) *acc {
+		g, ok := grants[clientID]
+		if !ok {
+			g = &acc{scopes: map[string]bool{}}
+			grants[clientID] = g
+		}
+		return g
+	}
+
+	rows, err := s.DB.QueryContext(ctx, "SELECT t.client_id, COALESCE(c.name,''), t.scope, t.expires_at FROM auth.oauth_tokens t LEFT JOIN auth.oauth_clients c ON c.id=t.client_id WHERE t.user_id=$1 AND t.expires_at>now()", userID)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var clientID, name, scope string
+		var exp time.Time
+		if err := rows.Scan(&clientID, &name, &scope, &exp); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		g := touch(clientID)
+		if g.name == "" {
+			g.name = name
+		}
+		for _, sc := range SplitScopes(scope) {
+			g.scopes[sc] = true
+		}
+		g.active = true
+		if exp.After(g.expires) {
+			g.expires = exp
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	audits, err := s.DB.QueryContext(ctx, "SELECT a.client_id, COALESCE(c.name,''), a.scopes, a.created_at FROM auth.oauth_audit a LEFT JOIN auth.oauth_clients c ON c.id=a.client_id WHERE a.subject_user_id=$1 AND a.action IN ($2,$3) ORDER BY a.created_at DESC", userID, OAuthActionConsentAllow, OAuthActionTrustedAllow)
+	if err != nil {
+		return nil, err
+	}
+	for audits.Next() {
+		var clientID, name string
+		var scopes []string
+		var at time.Time
+		if err := audits.Scan(&clientID, &name, pq.Array(&scopes), &at); err != nil {
+			audits.Close()
+			return nil, err
+		}
+		g := touch(clientID)
+		if g.name == "" {
+			g.name = name
+		}
+		// 审计按时间倒序：第一条即最近一次授权，只有它决定"最近授权时间"。
+		if g.lastAt.IsZero() {
+			g.lastAt = at
+			// 没有生效中的令牌时（已过期或已被撤回），scope 以最近一次授权为准，
+			// 否则列表会显示一个空 scope 的应用。
+			if !g.active {
+				for _, sc := range scopes {
+					g.scopes[sc] = true
+				}
+			}
+		}
+	}
+	audits.Close()
+	if err := audits.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make([]AuthorizedApp, 0, len(grants))
+	for clientID, g := range grants {
+		// 客户端已被删除时名字取不到，用 client_id 兜底：列表项不能没有标题。
+		name := g.name
+		if strings.TrimSpace(name) == "" {
+			name = clientID
+		}
+		item := AuthorizedApp{ClientID: clientID, Name: name, Scopes: SortedScopes(g.scopes), Active: g.active}
+		if !g.lastAt.IsZero() {
+			item.LastAuthorizedAt = g.lastAt.UTC().Format(time.RFC3339)
+		}
+		if g.active && !g.expires.IsZero() {
+			item.ExpiresAt = g.expires.UTC().Format(time.RFC3339)
+		}
+		out = append(out, item)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Active != out[j].Active {
+			return out[i].Active
+		}
+		if out[i].LastAuthorizedAt != out[j].LastAuthorizedAt {
+			return out[i].LastAuthorizedAt > out[j].LastAuthorizedAt
+		}
+		return out[i].ClientID < out[j].ClientID
+	})
+	return out, nil
+}
+
+// SortedScopes 把 scope 集合按稳定顺序展开（授权顺序不留痕，排序保证列表与审计可比对）。
+func SortedScopes(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for sc := range set {
+		out = append(out, sc)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// RevokeOwnOAuthGrant 让用户撤回自己对某个应用的授权：删除本人该客户端的未过期令牌
+// 与未兑换的授权码，并留一条审计。
+//
+// 只按 (user_id, client_id) 定位，天然碰不到别人的授权——这也是它与管理员的
+// /admin/users/{id}/revoke-oauth-tokens（按用户，需权限码）的区别。
+func (s *Store) RevokeOwnOAuthGrant(ctx context.Context, userID, clientID string) (int, error) {
+	userID = strings.TrimSpace(userID)
+	clientID = strings.TrimSpace(clientID)
+	if userID == "" {
+		return 0, fmt.Errorf("authentication_required")
+	}
+	if clientID == "" {
+		return 0, fmt.Errorf("invalid_client")
+	}
+	if _, err := s.GetOAuthClient(ctx, clientID); err != nil {
+		return 0, fmt.Errorf("client_not_found")
+	}
+	var (
+		issued []revokedToken
+		n      int
+	)
+	err := s.write(ctx, func(tx *sql.Tx) error {
+		var err error
+		if issued, err = issuedTokensForOwnGrant(ctx, tx, userID, clientID); err != nil {
+			return err
+		}
+		res, err := tx.ExecContext(ctx, "DELETE FROM auth.oauth_tokens WHERE user_id=$1 AND client_id=$2 AND expires_at>now()", userID, clientID)
+		if err != nil {
+			return err
+		}
+		deleted, _ := res.RowsAffected()
+		n = int(deleted)
+		if _, err := tx.ExecContext(ctx, "DELETE FROM auth.oauth_codes WHERE user_id=$1 AND client_id=$2 AND used=false AND expires_at>now()", userID, clientID); err != nil {
+			return err
+		}
+		return recordOAuthAuditTx(ctx, tx, userID, userID, clientID, OAuthActionTokensRevoked, nil, "self_service")
+	})
+	if err != nil {
+		return 0, err
+	}
+	revokeIssued(s.Tokens, issued)
+	return n, nil
+}
+
+// issuedTokensForOwnGrant 读该用户在该客户端下未过期的令牌行（jti 用于本进程内立即注销）。
+func issuedTokensForOwnGrant(ctx context.Context, tx *sql.Tx, userID, clientID string) ([]revokedToken, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT COALESCE(jti,''), expires_at FROM auth.oauth_tokens WHERE user_id=$1 AND client_id=$2 AND expires_at>now()", userID, clientID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []revokedToken
+	for rows.Next() {
+		var r revokedToken
+		if err := rows.Scan(&r.jti, &r.exp); err != nil {
+			return nil, err
+		}
+		if r.jti != "" {
+			out = append(out, r)
+		}
+	}
+	return out, rows.Err()
 }
 
 // revokeOAuthTokens 是两条吊销路径的共同实现：删除令牌/授权码与写审计在同一事务里完成，

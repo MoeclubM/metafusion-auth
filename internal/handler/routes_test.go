@@ -16,6 +16,7 @@ import (
 // 两个入口内容完全相同）。改动路由会在这里失败，而不是等线上 404 才发现。
 var frozenRoutes = []string{
 	"DELETE /api/admin/groups/:code",
+	"DELETE /api/auth/oauth-grants/:client_id",
 	"DELETE /api/admin/oauth/clients/:id",
 	"GET /.well-known/jwks.json",
 	"GET /.well-known/openid-configuration",
@@ -29,6 +30,7 @@ var frozenRoutes = []string{
 	"GET /api/admin/users",
 	"GET /api/auth/invite",
 	"GET /api/auth/me",
+	"GET /api/auth/oauth-grants",
 	"GET /api/auth/settings",
 	"GET /api/developer/apps",
 	"GET /api/developer/apps/:id",
@@ -63,6 +65,7 @@ var frozenRoutes = []string{
 	"PUT /api/admin/settings",
 	"PUT /api/admin/users/:id/groups",
 	"PUT /api/admin/users/:id/password",
+	"PUT /api/admin/users/:id/ban",
 	"PUT /api/admin/users/:id/role",
 	"PUT /api/developer/apps/:id",
 	"PUT /api/auth/password",

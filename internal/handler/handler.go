@@ -8,6 +8,7 @@
 package handler
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -29,13 +30,18 @@ type Handler struct {
 	// developer 是开发者中心的存储能力（生产环境同样是下面的 store）。
 	// 与 oauth 分开注入：两条路径的判定不同（一个按权限码，一个按应用归属）。
 	developer developerStore
+	// rateLimitPolicy 覆盖"是否限流、每分钟几次"的来源：生产为 nil（走 store 的实例设置），
+	// 用例据此在不建库的前提下断言开关与速率。
+	rateLimitPolicy func(context.Context) (bool, int)
 }
 
 func New(s *store.Store) *Handler { return &Handler{store: s, oauth: s, developer: s} }
 
-// Register 挂载全部路由。限流沿用主仓库的口径：只对认证写入类接口按 IP 固定窗口限流。
+// Register 挂载全部路由。限流沿用主仓库的口径：只对认证写入类接口按 IP 固定窗口限流，
+// 但速率与开关按请求读实例设置（auth_rate_limit_enabled / auth_rate_limit_per_minute），
+// 让管理台里的两个设置真正生效——接线前它们公开给前端却没人读。
 func (h *Handler) Register(r *gin.Engine) {
-	limiter := rateLimiter(15, time.Minute)
+	limiter := h.rateLimiter()
 	api := r.Group("/api")
 	api.Use(h.identity())
 	h.registerAuth(api, limiter)
@@ -265,6 +271,29 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		respond(c, gin.H{"ok": true}, s.LogoutAll(c.Request.Context(), u.ID))
 	})
 
+	// 用户自助管理自己的第三方授权（设置页的"已授权应用"）。
+	// 与管理员的 /admin/users/{id}/revoke-oauth-tokens 的区别是**归属**：
+	// 这里只认当前登录身份，路径里没有别人的 user id，因此普通成员也能收回自己的授权。
+	api.GET("/auth/oauth-grants", requireUser(false), func(c *gin.Context) {
+		u := currentUser(c)
+		if u == nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication_required"})
+			return
+		}
+		items, err := s.ListOAuthGrants(c.Request.Context(), u.ID)
+		respond(c, gin.H{"items": items}, err)
+	})
+	api.DELETE("/auth/oauth-grants/:client_id", requireUser(false), func(c *gin.Context) {
+		u := currentUser(c)
+		if u == nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication_required"})
+			return
+		}
+		n, err := s.RevokeOwnOAuthGrant(c.Request.Context(), u.ID, c.Param("client_id"))
+		// 幂等：本来就没有有效令牌时 revoked=0 仍回 ok——用户点"移除"要的是结果状态。
+		respond(c, gin.H{"ok": true, "revoked": n}, err)
+	})
+
 	api.GET("/admin/users", requirePermission("auth.users.manage"), func(c *gin.Context) {
 		users, err := s.ListUsers(c.Request.Context())
 		respond(c, gin.H{"items": users}, err)
@@ -298,6 +327,29 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 			return
 		}
 		respond(c, gin.H{"ok": true}, s.ResetUserPassword(c.Request.Context(), c.Param("id"), in.Password, currentUser(c)))
+	})
+
+	// PUT /admin/users/:id/ban 封禁或解封账号（body {banned: bool}）。
+	// 封禁会连带删除该用户的服务端会话、第三方令牌与未兑换授权码，并让验签路径立即拒绝，
+	// 所以这里返回"保存后的账号投影"，管理台据此刷新该行而不是猜结果。
+	api.PUT("/admin/users/:id/ban", requirePermission("auth.users.manage"), func(c *gin.Context) {
+		var in struct {
+			Banned *bool `json:"banned"`
+		}
+		if !body(c, &in) {
+			return
+		}
+		if in.Banned == nil {
+			// 缺字段按非法载荷拒绝：把"没传"当成解封，会让一次误请求悄悄放人进来。
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_payload"})
+			return
+		}
+		u, err := s.SetUserBanned(c.Request.Context(), c.Param("id"), *in.Banned, currentUser(c))
+		if err != nil {
+			respond(c, nil, err)
+			return
+		}
+		respond(c, gin.H{"ok": true, "user": u}, nil)
 	})
 }
 
@@ -419,24 +471,43 @@ func respond(c *gin.Context, v any, err error) {
 		status = http.StatusConflict
 	case code == "invalid_token":
 		status = http.StatusUnauthorized
+	case code == "account_banned":
+		// 口令/令牌本身没问题，是账号被停用：401 会让客户端引导"重新登录"然后又被拒一次，
+		// 403 才能让前端提示"账号已停用，请联系站务"。
+		status = http.StatusForbidden
 	case code == "client_not_found":
 		status = http.StatusNotFound
 	}
 	c.JSON(status, gin.H{"error": code})
 }
 
-// rateLimiter 是按 IP 的固定窗口计数（与主仓库 setup/login 的限流口径一致）。
-type bucket struct {
-	mu       sync.Mutex
-	start    time.Time
-	n        int
-	lastSeen time.Time
-}
-
-func rateLimiter(limit int, window time.Duration) gin.HandlerFunc {
+// rateLimiter 是按 IP 的固定窗口计数（与主仓库 setup/login 的限流口径一致），
+// 速率与开关按请求从实例设置读取：
+//
+//	· auth_rate_limit_enabled=false  → 直接放行，且不计数（关掉就是关掉，不留半开状态）；
+//	· auth_rate_limit_per_minute=N   → 每分钟 N 次，改设置后立即用新上限（已累计的计数不重置，
+//	  与固定窗口语义一致：窗口内超限仍然拒绝，不会因为"刚改了上限"而白送配额）。
+//
+// 策略本身带短缓存（见 store.RateLimitPolicy），避免每个请求打库。
+func (h *Handler) rateLimiter() gin.HandlerFunc {
 	var mu sync.Mutex
 	buckets := map[string]*bucket{}
+	window := time.Minute
 	return func(c *gin.Context) {
+		// 没有注入来源时按默认策略（与接线前的硬编码 15/分钟一致）：
+		// 直接构造 Handler 的用例（oauth 内存替身）也走同一条判定，不会悄悄变成"不限流"。
+		enabled, limit := true, store.DefaultRateLimitPerMinute
+		policy := h.rateLimitPolicy
+		if policy == nil && h.store != nil {
+			policy = h.store.RateLimitPolicy
+		}
+		if policy != nil {
+			enabled, limit = policy(c.Request.Context())
+		}
+		if !enabled || limit <= 0 {
+			c.Next()
+			return
+		}
 		key := c.ClientIP()
 		now := time.Now()
 		mu.Lock()
@@ -445,6 +516,7 @@ func rateLimiter(limit int, window time.Duration) gin.HandlerFunc {
 			b = &bucket{start: now}
 			buckets[key] = b
 		}
+		// 桶只在超过 4096 个时才清理一次：清理与限流判定分开加锁，避免长临界区。
 		if len(buckets) > 4096 {
 			for k, v := range buckets {
 				if now.Sub(v.lastSeen) > window {
@@ -469,4 +541,12 @@ func rateLimiter(limit int, window time.Duration) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+// rateLimiter 是按 IP 的固定窗口计数（与主仓库 setup/login 的限流口径一致）。
+type bucket struct {
+	mu       sync.Mutex
+	start    time.Time
+	n        int
+	lastSeen time.Time
 }

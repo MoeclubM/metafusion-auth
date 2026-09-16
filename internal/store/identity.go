@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -18,9 +19,11 @@ import (
 func (s *Store) User(ctx context.Context, token string) (*User, error) {
 	h := sessionHash(token)
 	var u User
-	err := s.DB.QueryRowContext(ctx, "SELECT u.id,u.username,COALESCE(u.email,''),u.role FROM auth.sessions s JOIN auth.users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now()", h).Scan(&u.ID, &u.Username, &u.Email, &u.Role)
+	// NOT u.banned 是必须的：封禁后会话行与令牌行会被删掉，但"删行"与"封禁生效"之间
+	// 不该有窗口，读路径自己也拦一道（旧库/并行实例里残留的行同样按封禁处理）。
+	err := s.DB.QueryRowContext(ctx, "SELECT u.id,u.username,COALESCE(u.email,''),u.role FROM auth.sessions s JOIN auth.users u ON u.id=s.user_id WHERE s.token_hash=$1 AND NOT u.banned AND s.expires_at>now()", h).Scan(&u.ID, &u.Username, &u.Email, &u.Role)
 	if err != nil {
-		err = s.DB.QueryRowContext(ctx, "SELECT u.id,u.username,COALESCE(u.email,''),u.role FROM auth.oauth_tokens t JOIN auth.users u ON u.id=t.user_id WHERE t.token_hash=$1 AND t.expires_at>now()", h).Scan(&u.ID, &u.Username, &u.Email, &u.Role)
+		err = s.DB.QueryRowContext(ctx, "SELECT u.id,u.username,COALESCE(u.email,''),u.role FROM auth.oauth_tokens t JOIN auth.users u ON u.id=t.user_id WHERE t.token_hash=$1 AND NOT u.banned AND t.expires_at>now()", h).Scan(&u.ID, &u.Username, &u.Email, &u.Role)
 	}
 	if err != nil {
 		return &u, err
@@ -98,9 +101,16 @@ func (s *Store) CreateUserWithRole(ctx context.Context, username, email, passwor
 func (s *Store) Login(ctx context.Context, username, password string) (string, User, error) {
 	var u User
 	var stored string
-	err := s.DB.QueryRowContext(ctx, "SELECT id,username,COALESCE(email,''),role,password_hash FROM auth.users WHERE username=$1 OR (email=$1 AND email<>'')", strings.TrimSpace(username)).Scan(&u.ID, &u.Username, &u.Email, &u.Role, &stored)
+	var banned bool
+	err := s.DB.QueryRowContext(ctx, "SELECT id,username,COALESCE(email,''),role,password_hash,banned FROM auth.users WHERE username=$1 OR (email=$1 AND email<>'')", strings.TrimSpace(username)).Scan(&u.ID, &u.Username, &u.Email, &u.Role, &stored, &banned)
 	if err != nil || bcrypt.CompareHashAndPassword([]byte(stored), []byte(password)) != nil {
 		return "", u, fmt.Errorf("invalid_credentials")
+	}
+	// 封禁判定放在口令校验之后：口令对但不让进，与"口令错"必须给不同错误码，
+	// 客户端才能提示"账号已被停用、联系站务"而不是让人反复重试密码。
+	if banned {
+		u.Banned = true
+		return "", u, fmt.Errorf("account_banned")
 	}
 	// 令牌里带组与权限：下游服务本地验签即可判定能力，不必回调账号服务。
 	if err := s.WithAccess(ctx, &u); err != nil {
@@ -157,6 +167,11 @@ func (s *Store) Logout(ctx context.Context, token string) error {
 func (s *Store) Refresh(ctx context.Context, token string) (string, User, error) {
 	u, err := s.Authenticate(ctx, token)
 	if err != nil || u == nil {
+		// 封禁是"账号被停用"，不是"令牌坏了"：续期路径同样要拒，但错误码要能区分，
+		// 否则前端只会引导用户重新登录，然后在登录页再被拒一次。
+		if err != nil && err.Error() == "account_banned" {
+			return "", User{}, fmt.Errorf("account_banned")
+		}
 		return "", User{}, fmt.Errorf("invalid_token")
 	}
 	var fresh User
@@ -221,8 +236,120 @@ func (s *Store) LogoutAll(ctx context.Context, userID string) error {
 	return err
 }
 
+// ── 账号封禁 ──
+
+// bannedCacheTTL 是封禁状态的缓存时长。验签路径每个请求都要问一次"这个账号是否被封禁"，
+// 每次打库等于给每个已登录请求加一次往返；封禁/解封会立即改写本实例的缓存，
+// 因此 TTL 只决定其它实例的最长滞后。
+const bannedCacheTTL = 5 * time.Second
+
+type bannedEntry struct {
+	banned    bool
+	expiresAt time.Time
+}
+
+func (s *Store) cacheBan(userID string, banned bool) {
+	s.cacheMu.Lock()
+	if s.bannedCache == nil {
+		s.bannedCache = map[string]bannedEntry{}
+	}
+	s.bannedCache[userID] = bannedEntry{banned: banned, expiresAt: time.Now().Add(bannedCacheTTL)}
+	s.cacheMu.Unlock()
+}
+
+// IsBanned 报告账号当前是否被封禁，供验签路径判定。
+//
+// 读不到库（无 DB 的桩实例）或账号不存在时返回 false：这条判定是"额外的拒绝条件"，
+// 它自己出问题不该让所有人登不进来——口令、令牌签名与有效期仍是主判定。
+func (s *Store) IsBanned(ctx context.Context, userID string) (bool, error) {
+	userID = strings.TrimSpace(userID)
+	if s.DB == nil || userID == "" {
+		return false, nil
+	}
+	now := time.Now()
+	s.cacheMu.Lock()
+	if e, ok := s.bannedCache[userID]; ok && now.Before(e.expiresAt) {
+		s.cacheMu.Unlock()
+		return e.banned, nil
+	}
+	s.cacheMu.Unlock()
+	var banned bool
+	if err := s.DB.QueryRowContext(ctx, "SELECT banned FROM auth.users WHERE id=$1", userID).Scan(&banned); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	s.cacheBan(userID, banned)
+	return banned, nil
+}
+
+// SetUserBanned 封禁或解封账号，返回更新后的账号投影。
+//
+// 封禁不只是置一个标记：同时删除该用户的服务端会话、第三方令牌与未兑换的授权码，
+// 否则"封禁"在 15 分钟（访问令牌有效期）内是空的。无状态 JWT 无法逐个撤回，
+// 这条路径靠两件事兜住：删行让回退查库失效，验签路径的 IsBanned 让手里的令牌立刻作废。
+//
+// 两条护栏与 UpdateUserRole 的 cannot_demote_sole_admin 同口径：不能封自己（封完只能求别人解开），
+// 也不能把最后一个还能登录的管理员封掉（实例会失去管理入口）。
+func (s *Store) SetUserBanned(ctx context.Context, targetUserID string, banned bool, actor *User) (User, error) {
+	var out User
+	if !Can(actor, "auth.users.manage") {
+		return out, fmt.Errorf("forbidden")
+	}
+	targetUserID = strings.TrimSpace(targetUserID)
+	if banned && actor != nil && actor.ID == targetUserID {
+		return out, fmt.Errorf("cannot_ban_self")
+	}
+	var role string
+	if err := s.DB.QueryRowContext(ctx, "SELECT role FROM auth.users WHERE id=$1", targetUserID).Scan(&role); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return out, fmt.Errorf("user_not_found")
+		}
+		return out, err
+	}
+	if banned && role == "admin" {
+		// 已封禁的管理员不计入：否则"先封一个、再封另一个"就能绕过护栏。
+		var admins int
+		if err := s.DB.QueryRowContext(ctx, "SELECT count(*) FROM auth.users WHERE role='admin' AND NOT banned").Scan(&admins); err != nil {
+			return out, err
+		}
+		if admins <= 1 {
+			return out, fmt.Errorf("cannot_ban_sole_admin")
+		}
+	}
+	var revoked []revokedToken
+	err := s.write(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, "UPDATE auth.users SET banned=$1 WHERE id=$2", banned, targetUserID); err != nil {
+			return err
+		}
+		if !banned {
+			return nil
+		}
+		var err error
+		if revoked, err = issuedTokensFor(ctx, tx, "user_id", targetUserID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM auth.sessions WHERE user_id=$1", targetUserID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM auth.oauth_tokens WHERE user_id=$1", targetUserID); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, "DELETE FROM auth.oauth_codes WHERE user_id=$1 AND used=false AND expires_at>now()", targetUserID)
+		return err
+	})
+	if err != nil {
+		return out, err
+	}
+	// 注销 jti 必须在事务提交后：回填内存状态不属于数据库事务的一部分。
+	revokeIssued(s.Tokens, revoked)
+	s.cacheBan(targetUserID, banned)
+	return User{ID: targetUserID, Role: role, Banned: banned}, nil
+}
+
 func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
-	rows, err := s.DB.QueryContext(ctx, "SELECT id, username, COALESCE(email,''), role FROM auth.users ORDER BY username ASC")
+	rows, err := s.DB.QueryContext(ctx, "SELECT id, username, COALESCE(email,''), role, banned FROM auth.users ORDER BY username ASC")
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +357,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	var out []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.Role); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.Role, &u.Banned); err != nil {
 			return nil, err
 		}
 		out = append(out, u)

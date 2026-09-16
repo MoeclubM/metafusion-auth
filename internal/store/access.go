@@ -129,6 +129,12 @@ const (
 	SettingSiteName             = "site_name"
 )
 
+// DefaultRateLimitPerMinute 是限流默认速率，单位"次/分钟"。
+//
+// 它必须等于本设置真正生效前的强制值（15/分钟）：设置一旦接线，默认值就成了线上行为，
+// 顺手改成别的数字等于在"接线"这一步悄悄改掉限流强度。
+const DefaultRateLimitPerMinute = 15
+
 // DefaultSettings 是实例设置默认值：**注册默认关闭**（受控站点），邀请码默认不强制，
 // 新注册账号默认进 member 组（无任何特权）。
 func DefaultSettings() map[string]any {
@@ -137,10 +143,56 @@ func DefaultSettings() map[string]any {
 		SettingInviteRequired:       false,
 		SettingRequireEmailVerify:   false,
 		SettingAuthRateLimitEnabled: true,
-		SettingRateLimitPerMinute:   30,
+		SettingRateLimitPerMinute:   DefaultRateLimitPerMinute,
 		SettingRegistrationGroups:   []string{"member"},
 		SettingSiteName:             "MetaFusion",
 	}
+}
+
+// rateLimitCacheTTL 是限流策略的缓存时长。限流在每个请求上都要问一次策略，
+// 每次都打库等于给认证写入端点加一次往返；写设置时立即失效（见 UpdateSettings），
+// 因此 5 秒只是"多实例下最长滞后"，本实例改完立刻生效。
+const rateLimitCacheTTL = 5 * time.Second
+
+type cachedRateLimit struct {
+	enabled   bool
+	perMinute int
+	expiresAt time.Time
+}
+
+// RateLimitPolicy 返回当前生效的限流策略（是否启用、每分钟上限），供 HTTP 中间件按请求读取。
+//
+// 读不到设置时按默认值返回（fail-closed）：宁可继续限流，也不要因为一次读库失败就放开。
+// 非法速率（<=0）同样回落默认值，避免"设成 0"变成把所有人挡在门外。
+func (s *Store) RateLimitPolicy(ctx context.Context) (bool, int) {
+	now := time.Now()
+	s.cacheMu.Lock()
+	if c := s.rateLimit; c != nil && now.Before(c.expiresAt) {
+		s.cacheMu.Unlock()
+		return c.enabled, c.perMinute
+	}
+	s.cacheMu.Unlock()
+
+	enabled, perMinute := true, DefaultRateLimitPerMinute
+	if all, err := s.Settings(ctx); err == nil {
+		if v, ok := all[SettingAuthRateLimitEnabled].(bool); ok {
+			enabled = v
+		}
+		if n, ok := toInt(all[SettingRateLimitPerMinute]); ok && n > 0 {
+			perMinute = n
+		}
+	}
+	s.cacheMu.Lock()
+	s.rateLimit = &cachedRateLimit{enabled: enabled, perMinute: perMinute, expiresAt: now.Add(rateLimitCacheTTL)}
+	s.cacheMu.Unlock()
+	return enabled, perMinute
+}
+
+// invalidateRateLimitCache 让下一次请求重新读设置：管理台保存后立即生效，不必等 TTL。
+func (s *Store) invalidateRateLimitCache() {
+	s.cacheMu.Lock()
+	s.rateLimit = nil
+	s.cacheMu.Unlock()
 }
 
 // Settings 读取实例设置（缺省项用默认值补齐）。
@@ -241,7 +293,7 @@ func (s *Store) UpdateSettings(ctx context.Context, patch map[string]any, actor 
 	if len(norm) == 0 {
 		return nil
 	}
-	return s.write(ctx, func(tx *sql.Tx) error {
+	err := s.write(ctx, func(tx *sql.Tx) error {
 		for k, v := range norm {
 			raw, err := json.Marshal(v)
 			if err != nil {
@@ -253,6 +305,11 @@ func (s *Store) UpdateSettings(ctx context.Context, patch map[string]any, actor 
 		}
 		return nil
 	})
+	if err == nil {
+		// 限流策略按请求读取：这里立刻作废缓存，管理台改完不必等 TTL 才生效。
+		s.invalidateRateLimitCache()
+	}
+	return err
 }
 
 func toInt(v any) (int, bool) {

@@ -6,7 +6,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 )
 
 // User 是账号的对外投影；password_hash 永不出现在 JSON 里。
@@ -21,6 +23,9 @@ type User struct {
 	Role        string   `json:"role"`
 	Groups      []string `json:"groups,omitempty"`
 	Permissions []string `json:"permissions,omitempty"`
+	// Banned 只在为真时下发：既有客户端的载荷形状保持不变（omitempty），
+	// 管理台据此显示封禁状态。
+	Banned bool `json:"banned,omitempty"`
 }
 
 // Store 组合数据库与令牌签发器：签发器为 nil 时退化为纯查库模式，
@@ -28,6 +33,12 @@ type User struct {
 type Store struct {
 	DB     *sql.DB
 	Tokens *TokenIssuer
+
+	// 限流策略与封禁状态的短时缓存：两者都在热路径上按请求询问，
+	// 每次打库会让认证写入端点多一次往返；写方（改设置 / 封禁）会立即失效对应缓存。
+	cacheMu     sync.Mutex
+	rateLimit   *cachedRateLimit
+	bannedCache map[string]bannedEntry
 }
 
 // schema 是 auth schema 的唯一来源（主仓库曾经的 schema.sql 已随迁移基线收敛删除），
@@ -39,6 +50,9 @@ CREATE TABLE IF NOT EXISTS auth.users (
  role text NOT NULL CHECK (role IN ('user','editor','admin'))
 );
 ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS email text NOT NULL DEFAULT '';
+-- 账号封禁：被封禁的账号不能登录，已有服务端会话与第三方令牌立即失效（登录/续期/验签三处都拒）。
+-- 默认 false，既保证既有实例升级后行为不变，也让"读到空值"不会变成放行。
+ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS banned boolean NOT NULL DEFAULT false;
 CREATE TABLE IF NOT EXISTS auth.sessions (
  token_hash text PRIMARY KEY, user_id uuid NOT NULL REFERENCES auth.users(id), expires_at timestamptz NOT NULL
 );
@@ -173,6 +187,11 @@ func (s *Store) Authenticate(ctx context.Context, token string) (*User, error) {
 	}
 	if s.Tokens != nil {
 		if claims, err := s.Tokens.Verify(token); err == nil {
+			// 验签只证明令牌没过期，不证明账号仍然可用：封禁必须在这里拦下，
+			// 否则被封禁的人还能用手里那张≤15 分钟的 JWT 继续调用（删库行拦不住无状态令牌）。
+			if banned, berr := s.IsBanned(ctx, claims.Subject); berr == nil && banned {
+				return nil, fmt.Errorf("account_banned")
+			}
 			return ClaimsToUser(claims), nil
 		}
 	}
