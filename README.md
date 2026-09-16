@@ -128,6 +128,9 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 ```bash
 go run cmd/server/main.go
 go test ./... && go vet ./...
+
+# 真实库回归（可选）：库名必须含 _test；两个测试包都会重建测试数据，需串行
+AUTH_TEST_DSN='postgres://user:pw@127.0.0.1:5432/metafusion_test?sslmode=disable' go test -p 1 ./...
 ```
 
 ## 已知缺口与待定
