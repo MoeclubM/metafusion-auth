@@ -129,4 +129,3 @@ func TestAdminGateIsScopedToTheExactCode(t *testing.T) {
 		}
 	}
 }
-
