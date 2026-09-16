@@ -47,6 +47,9 @@ CREATE TABLE IF NOT EXISTS auth.oauth_clients (
  redirect_uris text[] NOT NULL DEFAULT '{}', trusted boolean NOT NULL DEFAULT false,
  created_at timestamptz NOT NULL DEFAULT now()
 );
+-- 客户端的 scope 白名单：授权时收敛成「这份白名单 ∩ 请求」。老行按默认值补齐三种 scope，
+-- 保持拆分前"不传 scope 也拿到 profile"的行为不变。
+ALTER TABLE auth.oauth_clients ADD COLUMN IF NOT EXISTS scopes text[] NOT NULL DEFAULT '{openid,profile,email}';
 CREATE TABLE IF NOT EXISTS auth.oauth_codes (
  code text PRIMARY KEY, client_id text NOT NULL REFERENCES auth.oauth_clients(id) ON DELETE CASCADE,
  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,

@@ -5,14 +5,14 @@ package handler
 // 切流时前端与第三方客户端都不需要改动；两个入口的发现文档内容完全相同。
 
 import (
-	"fmt"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/MoeclubM/metafusion-auth/internal/store"
 )
 
 func (h *Handler) registerOAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
@@ -29,9 +29,16 @@ func (h *Handler) registerOAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		redirectURI := c.Query("redirect_uri")
 		responseType := c.Query("response_type")
 		state := c.Query("state")
-		scope := c.DefaultQuery("scope", "profile")
+		rawScope := c.Query("scope")
 		if responseType != "code" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported_response_type"})
+			return
+		}
+		// 先校验请求本身的 scope（不支持的项直接 invalid_scope），再收敛成
+		// 「客户端允许 ∩ 请求」：写进授权码与令牌的只能是这个交集。
+		requested, scopeErr := store.ParseScopes(rawScope)
+		if scopeErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_scope", "unsupported_scopes": store.UnsupportedScopes(rawScope), "supported_scopes": store.SupportedScopes})
 			return
 		}
 		client, err := s.GetOAuthClient(c.Request.Context(), clientID)
@@ -39,15 +46,13 @@ func (h *Handler) registerOAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_client"})
 			return
 		}
-		validURI := false
-		for _, uri := range client.RedirectURIs {
-			if uri == redirectURI {
-				validURI = true
-				break
-			}
-		}
-		if !validURI {
+		if !store.RedirectURIAllowed(client.RedirectURIs, redirectURI) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_redirect_uri"})
+			return
+		}
+		granted := store.ConvergeScopes(requested, client.Scopes)
+		if len(granted) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_scope", "client_scopes": client.Scopes, "supported_scopes": store.SupportedScopes})
 			return
 		}
 		u := currentUser(c)
@@ -60,20 +65,12 @@ func (h *Handler) registerOAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 			c.Redirect(http.StatusFound, target)
 			return
 		}
-		code, err := s.CreateOAuthCode(c.Request.Context(), clientID, u.ID, redirectURI, scope, c.Query("code_challenge"), c.Query("code_challenge_method"))
+		code, _, err := s.CreateOAuthCode(c.Request.Context(), clientID, u.ID, redirectURI, store.FormatScopes(granted), c.Query("code_challenge"), c.Query("code_challenge_method"))
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		sep := "?"
-		if strings.Contains(redirectURI, "?") {
-			sep = "&"
-		}
-		target := fmt.Sprintf("%s%scode=%s", redirectURI, sep, url.QueryEscape(code))
-		if state != "" {
-			target += "&state=" + url.QueryEscape(state)
-		}
-		c.Redirect(http.StatusFound, target)
+		c.Redirect(http.StatusFound, oauthRedirect(redirectURI, [][2]string{{"code", code}, {"state", state}}))
 	})
 	oauth.POST("/token", limiter, func(c *gin.Context) {
 		grantType := c.PostForm("grant_type")
@@ -105,20 +102,20 @@ func (h *Handler) registerOAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported_grant_type"})
 			return
 		}
-		token, u, err := s.ExchangeOAuthCode(c.Request.Context(), clientID, clientSecret, code, redirectURI, verifier)
+		grant, err := s.ExchangeOAuthCode(c.Request.Context(), clientID, clientSecret, code, redirectURI, verifier)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		resp := gin.H{
-			"access_token": token,
+			"access_token": grant.Token,
 			"token_type":   "Bearer",
-			"expires_in":   int((30 * 24 * time.Hour).Seconds()),
-			"scope":        "profile",
-			"user":         u,
+			"expires_in":   grant.ExpiresIn,
+			"scope":        grant.Scope,
+			"user":         grant.User,
 		}
 		// OIDC：同密钥签发 id_token（aud 指向该客户端），客户端可用 JWKS 本地验签。
-		if idToken, exp, ierr := s.IDToken(*u, clientID); ierr == nil && idToken != "" {
+		if idToken, exp, ierr := s.IDToken(*grant.User, clientID); ierr == nil && idToken != "" {
 			resp["id_token"] = idToken
 			resp["id_token_expires_at"] = exp
 		}
@@ -172,9 +169,32 @@ func (h *Handler) discovery(c *gin.Context) {
 		"grant_types_supported":                 []string{"authorization_code"},
 		"subject_types_supported":               []string{"public"},
 		"id_token_signing_alg_values_supported": []string{"RS256"},
-		"scopes_supported":                      []string{"profile", "email"},
+		"scopes_supported":                      store.SupportedScopes,
+		"code_challenge_methods_supported":      []string{"S256", "plain"},
 		"claims_supported":                      []string{"sub", "preferred_username", "email", "role"},
 	})
+}
+
+// oauthRedirect 把参数拼回回调地址：已有的 query 用 & 续接，键值统一转义，
+// state 原样带回（第三方靠它对齐自己发起的请求）。空值参数直接跳过。
+func oauthRedirect(redirectURI string, params [][2]string) string {
+	sep := "?"
+	if strings.Contains(redirectURI, "?") {
+		sep = "&"
+	}
+	var b strings.Builder
+	b.WriteString(redirectURI)
+	for _, p := range params {
+		if p[1] == "" {
+			continue
+		}
+		b.WriteString(sep)
+		b.WriteString(url.QueryEscape(p[0]))
+		b.WriteString("=")
+		b.WriteString(url.QueryEscape(p[1]))
+		sep = "&"
+	}
+	return b.String()
 }
 
 func (h *Handler) jwks(c *gin.Context) {

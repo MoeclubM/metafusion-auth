@@ -31,6 +31,7 @@ var frozenTableDefs = map[string]map[string]string{
 		"secret_hash":   "secret_hash text not null",
 		"name":          "name text not null",
 		"redirect_uris": "redirect_uris text[] not null default '{}'",
+		"scopes":        "scopes text[] not null default '{openid,profile,email}'",
 		"trusted":       "trusted boolean not null default false",
 		"created_at":    "created_at timestamptz not null default now()",
 	},
