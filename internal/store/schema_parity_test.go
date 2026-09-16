@@ -6,12 +6,12 @@ import (
 	"testing"
 )
 
-// frozenTableDefs 是**线上 auth schema 的终态**：它最初由主仓库的 schema.sql + 迁移 000009
+// frozenTableDefs 是**线上 auth schema 的终态**：它最初由主仓库当年的 schema.sql（该文件已随主仓库
 // （PKCE 列）建出来，账号拆分后由本服务的 Init 接管。之所以继续冻结：这些列形状是运行中的
 // 数据与历史会话/令牌的兼容基线，改错了编译与静态检查都发现不了，只有到线上才会以
 // "登录失败"或"查不到会话"的形式暴露。
 //
-// 注意：主仓库现在**不再**创建 auth schema 的对象（见其 schema.sql 与迁移 000014），
+// 注意：主仓库现在**不再**创建 auth schema 的对象（schema.sql 与其后续迁移都已随迁移基线收敛删除），
 // 因此这份冻结值是唯一来源，不能再拿主仓库的文件做对照。
 var frozenTableDefs = map[string]map[string]string{
 	"auth.users": {
