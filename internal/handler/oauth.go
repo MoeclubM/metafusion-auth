@@ -199,6 +199,9 @@ func (h *Handler) registerOAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		})
 	})
 
+	// 管理台：客户端管理与令牌吊销（受 auth.oauth.manage 保护）。
+	h.registerOAuthAdmin(api)
+
 	// OIDC 发现与 JWKS：外部服务用公钥在本地验签访问令牌/id_token，无需回调本服务。
 	api.GET("/.well-known/openid-configuration", h.discovery)
 	api.GET("/oidc/jwks", h.jwks)

@@ -415,6 +415,8 @@ func respond(c *gin.Context, v any, err error) {
 		status = http.StatusConflict
 	case code == "invalid_token":
 		status = http.StatusUnauthorized
+	case code == "client_not_found":
+		status = http.StatusNotFound
 	}
 	c.JSON(status, gin.H{"error": code})
 }

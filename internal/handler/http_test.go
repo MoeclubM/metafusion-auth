@@ -22,6 +22,16 @@ import (
 func newTestServer(t *testing.T) (*gin.Engine, *store.Store) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
+	s := &store.Store{Tokens: newTestIssuer(t)}
+	r := gin.New()
+	New(s).Register(r)
+	return r, s
+}
+
+// newTestIssuer 生成一对进程内 RSA 密钥并配好 AUTH_JWT_PRIVATE_KEY，返回可用的签发器。
+// 单独抽出来是为了让需要真实数据库的用例也能拿到同一套签发器。
+func newTestIssuer(t *testing.T) *store.TokenIssuer {
+	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
@@ -35,10 +45,7 @@ func newTestServer(t *testing.T) (*gin.Engine, *store.Store) {
 	if err != nil {
 		t.Fatalf("issuer: %v", err)
 	}
-	s := &store.Store{Tokens: issuer}
-	r := gin.New()
-	New(s).Register(r)
-	return r, s
+	return issuer
 }
 
 func do(t *testing.T, r *gin.Engine, method, path, token string) *httptest.ResponseRecorder {
