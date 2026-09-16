@@ -23,9 +23,12 @@ import (
 
 type Handler struct {
 	store *store.Store
+	// oauth 是 OAuth 端点使用的存储能力（生产环境就是下面的 store）。
+	// 抽成接口是为了让整条授权链路能在没有数据库的环境里用 httptest 跑完，见 oauth.go。
+	oauth oauthStore
 }
 
-func New(s *store.Store) *Handler { return &Handler{store: s} }
+func New(s *store.Store) *Handler { return &Handler{store: s, oauth: s} }
 
 // Register 挂载全部路由。限流沿用主仓库的口径：只对认证写入类接口按 IP 固定窗口限流。
 func (h *Handler) Register(r *gin.Engine) {
@@ -133,7 +136,7 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		respond(c, gin.H{
 			"items":      invites,
 			"members":    members,
-			"can_create": store.HasPermission(u.Permissions, "auth.invites.manage"),
+			"can_create": store.Can(u, "auth.invites.manage"),
 		}, err)
 	})
 	api.POST("/auth/invite", requireUser(false), func(c *gin.Context) {
@@ -331,7 +334,7 @@ func requireUser(admin bool) gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication_required"})
 			return
 		}
-		if admin && !isAdmin(u) {
+		if admin && !store.Can(u, store.WildcardPermission) {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden"})
 			return
 		}
@@ -339,8 +342,9 @@ func requireUser(admin bool) gin.HandlerFunc {
 	}
 }
 
-// requirePermission 是管理台的细粒度闸门：权限码由权限组给出（见 store.PermissionCatalog）。
-// 兼容两条旧路径：role=admin（老令牌没有 permissions 声明）与 * 通配。
+// requirePermission 是管理台的细粒度闸门：**只认这一条码**（判定见 store.Can）。
+// 这里刻意不做"持任意 auth.* 码即视为管理员"的兜底：那会让持 auth.invites.manage 的
+// 成员通过 /api/admin/users 等其它域的闸门，把"每人只拿到被授予的那些码"打穿。
 func requirePermission(code string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		u := currentUser(c)
@@ -348,7 +352,7 @@ func requirePermission(code string) gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication_required"})
 			return
 		}
-		if !store.HasPermission(u.Permissions, code) && !isAdmin(u) {
+		if !store.Can(u, code) {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden", "required_permission": code})
 			return
 		}
@@ -356,21 +360,9 @@ func requirePermission(code string) gin.HandlerFunc {
 	}
 }
 
-// isAdmin 判定管理员：* 权限、auth.* 管理权限，或历史 role=admin。
-func isAdmin(u *store.User) bool {
-	if u == nil {
-		return false
-	}
-	if u.Role == "admin" {
-		return true
-	}
-	for _, p := range u.Permissions {
-		if p == "*" || strings.HasPrefix(p, "auth.") {
-			return true
-		}
-	}
-	return false
-}
+// isAdmin 判定"全权管理员"：* 通配码，或老令牌（无 permissions 声明）的历史 role=admin。
+// 与 requirePermission 同源（store.Can），不再按 auth.* 前缀放宽。
+func isAdmin(u *store.User) bool { return store.Can(u, store.WildcardPermission) }
 
 func tokenFromRequest(c *gin.Context) string {
 	token := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")

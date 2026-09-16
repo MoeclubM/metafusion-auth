@@ -112,7 +112,7 @@ func (s *Store) WithAccess(ctx context.Context, u *User) error {
 
 // CreateGroup 新建权限组。管理台可以自由增删组（系统组除外，见 DeleteGroup）。
 func (s *Store) CreateGroup(ctx context.Context, in Group, actor *User) (Group, error) {
-	if actor == nil || !HasPermission(actor.Permissions, "auth.groups.manage") {
+	if !Can(actor, "auth.groups.manage") {
 		return Group{}, fmt.Errorf("forbidden")
 	}
 	code := strings.TrimSpace(in.Code)
@@ -141,7 +141,7 @@ func (s *Store) CreateGroup(ctx context.Context, in Group, actor *User) (Group, 
 // UpdateGroup 按组码更新名称/权限/排序。系统组的权限可以改（管理员可能想调整），
 // 但 admin 组的 * 权限不可移除（否则会把自己锁死在门外，见下方校验）。
 func (s *Store) UpdateGroup(ctx context.Context, code string, in Group, actor *User) (Group, error) {
-	if actor == nil || !HasPermission(actor.Permissions, "auth.groups.manage") {
+	if !Can(actor, "auth.groups.manage") {
 		return Group{}, fmt.Errorf("forbidden")
 	}
 	if err := validatePermissionCodes(in.Permissions); err != nil {
@@ -177,7 +177,7 @@ func (s *Store) UpdateGroup(ctx context.Context, code string, in Group, actor *U
 
 // DeleteGroup 删除权限组：系统组不可删（它们承载"注册默认组""管理员"这类语义）。
 func (s *Store) DeleteGroup(ctx context.Context, code string, actor *User) error {
-	if actor == nil || !HasPermission(actor.Permissions, "auth.groups.manage") {
+	if !Can(actor, "auth.groups.manage") {
 		return fmt.Errorf("forbidden")
 	}
 	return s.write(ctx, func(tx *sql.Tx) error {
@@ -196,7 +196,7 @@ func (s *Store) DeleteGroup(ctx context.Context, code string, actor *User) error
 // SetUserGroups 覆盖式设置某人的组（成员分配的唯一入口）。
 // 护栏：不能把最后一个管理员移出 admin 组，否则实例将失去管理入口。
 func (s *Store) SetUserGroups(ctx context.Context, userID string, codes []string, actor *User) error {
-	if actor == nil || !HasPermission(actor.Permissions, "auth.users.manage") {
+	if !Can(actor, "auth.users.manage") {
 		return fmt.Errorf("forbidden")
 	}
 	return s.write(ctx, func(tx *sql.Tx) error {
@@ -297,7 +297,7 @@ func validatePermissionCodes(codes []string) error {
 // ── 邀请码 ──
 
 func (s *Store) CreateInvite(ctx context.Context, note string, maxUses int, expiresIn time.Duration, actor *User) (Invite, error) {
-	if actor == nil || !HasPermission(actor.Permissions, "auth.invites.manage") {
+	if !Can(actor, "auth.invites.manage") {
 		return Invite{}, fmt.Errorf("forbidden")
 	}
 	if maxUses <= 0 {
@@ -336,7 +336,7 @@ func (s *Store) ListInvites(ctx context.Context, actor *User) ([]Invite, error) 
 	}
 	q := "SELECT i.code,i.created_by,COALESCE(u.username,''),i.note,i.max_uses,i.used_count,i.revoked,i.expires_at,i.created_at FROM auth.invites i LEFT JOIN auth.users u ON u.id=i.created_by"
 	args := []any{}
-	if !HasPermission(actor.Permissions, "auth.invites.manage") {
+	if !Can(actor, "auth.invites.manage") {
 		q += " WHERE i.created_by=$1"
 		args = append(args, actor.ID)
 	}
@@ -364,7 +364,7 @@ func (s *Store) ListInvites(ctx context.Context, actor *User) ([]Invite, error) 
 }
 
 func (s *Store) RevokeInvite(ctx context.Context, code string, actor *User) error {
-	if actor == nil || !HasPermission(actor.Permissions, "auth.invites.manage") {
+	if !Can(actor, "auth.invites.manage") {
 		return fmt.Errorf("forbidden")
 	}
 	return s.write(ctx, func(tx *sql.Tx) error {

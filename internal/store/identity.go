@@ -57,7 +57,7 @@ func (s *Store) CreateUserWithRole(ctx context.Context, username, email, passwor
 	if len(u.Username) < 2 || len(u.Username) > 80 || len(password) < 12 || len(password) > 72 {
 		return u, fmt.Errorf("invalid_credentials_format")
 	}
-	if !setup && (actor == nil || actor.Role != "admin") {
+	if !setup && !Can(actor, "auth.users.manage") {
 		return u, fmt.Errorf("forbidden")
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
@@ -279,19 +279,27 @@ func (s *Store) attachAccess(ctx context.Context, users []User) error {
 }
 
 func (s *Store) UpdateUserRole(ctx context.Context, targetUserID, newRole string, actor *User) error {
-	if actor == nil || actor.Role != "admin" {
+	if !Can(actor, "auth.users.manage") {
 		return fmt.Errorf("forbidden")
 	}
 	if newRole != "admin" && newRole != "editor" && newRole != "user" {
 		return fmt.Errorf("invalid_role")
 	}
-	if actor.ID == targetUserID && newRole != "admin" {
-		var adminCount int
-		if err := s.DB.QueryRowContext(ctx, "SELECT count(*) FROM auth.users WHERE role='admin'").Scan(&adminCount); err != nil {
-			return err
+	// 护栏按目标当前身份判定（不只是自己）：只要降完还剩管理员就允许，
+	// 否则实例会失去管理入口。与 SetUserGroups 的"最后一个 admin 组成员"护栏同口径。
+	if newRole != "admin" {
+		var currentRole string
+		if err := s.DB.QueryRowContext(ctx, "SELECT role FROM auth.users WHERE id=$1", targetUserID).Scan(&currentRole); err != nil {
+			return fmt.Errorf("user_not_found")
 		}
-		if adminCount <= 1 {
-			return fmt.Errorf("cannot_demote_sole_admin")
+		if currentRole == "admin" {
+			var adminCount int
+			if err := s.DB.QueryRowContext(ctx, "SELECT count(*) FROM auth.users WHERE role='admin'").Scan(&adminCount); err != nil {
+				return err
+			}
+			if adminCount <= 1 {
+				return fmt.Errorf("cannot_demote_sole_admin")
+			}
 		}
 	}
 	// 角色与组同步：历史角色映射到等价组，避免"改了角色但权限没变"的双轨漂移。
@@ -320,7 +328,7 @@ func (s *Store) UpdateUserRole(ctx context.Context, targetUserID, newRole string
 }
 
 func (s *Store) ResetUserPassword(ctx context.Context, targetUserID, newPassword string, actor *User) error {
-	if actor == nil || actor.Role != "admin" {
+	if !Can(actor, "auth.users.manage") {
 		return fmt.Errorf("forbidden")
 	}
 	if len(newPassword) < 12 || len(newPassword) > 72 {

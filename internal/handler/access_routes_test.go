@@ -83,3 +83,50 @@ func TestAccessRoutesExistAndEnforceAuth(t *testing.T) {
 		}
 	}
 }
+
+// 管理闸门按**精确的权限码**判定：持一个 auth.* 码不等于管理员，不得通过其它管理域的闸门。
+// 被探测的两个端点都在鉴权之后才取数（/admin/permissions 是纯内存端点，/admin/settings
+// 在无数据库时返回默认值），所以这条用例不需要数据库即可证明"403 先于业务"。
+func TestAdminGateIsScopedToTheExactCode(t *testing.T) {
+	r, s := newTestServer(t)
+	sign := func(u store.User) string {
+		t.Helper()
+		tok, _, _, err := s.Tokens.Sign(u)
+		if err != nil {
+			t.Fatalf("sign: %v", err)
+		}
+		return tok
+	}
+	// 各持一个账号域码的成员：只应放行自己那一域。
+	scoped := []store.User{
+		{ID: "44444444-4444-4444-4444-444444444444", Username: "inviter", Role: "user", Permissions: []string{"auth.invites.manage"}},
+		{ID: "55555555-5555-5555-5555-555555555555", Username: "userops", Role: "user", Permissions: []string{"auth.users.manage"}},
+		{ID: "66666666-6666-6666-6666-666666666666", Username: "editor", Role: "editor", Permissions: []string{"catalog.entity.edit"}},
+	}
+	others := []struct{ method, path, needs string }{
+		{http.MethodGet, "/api/admin/permissions", "auth.groups.manage"},
+		{http.MethodGet, "/api/admin/settings", "auth.settings.manage"},
+		{http.MethodGet, "/api/admin/groups", "auth.groups.manage"},
+	}
+	for _, u := range scoped {
+		tok := sign(u)
+		for _, p := range others {
+			if w := do(t, r, p.method, p.path, tok); w.Code != http.StatusForbidden {
+				t.Errorf("%s 持 %v 访问 %s（需要 %s）应 403，实际 %d", u.Username, u.Permissions, p.path, p.needs, w.Code)
+			}
+		}
+	}
+	// 本域仍放行：持 auth.groups.manage 读权限码清单。
+	groupsOps := sign(store.User{ID: "77777777-7777-7777-7777-777777777777", Username: "groupops", Role: "user", Permissions: []string{"auth.groups.manage"}})
+	if w := do(t, r, http.MethodGet, "/api/admin/permissions", groupsOps); w.Code != http.StatusOK {
+		t.Errorf("持 auth.groups.manage 应可读权限码清单，实际 %d", w.Code)
+	}
+	// 老令牌（完全没有 permissions 声明）仍按历史 role=admin 兜底，管理台不会因此锁死。
+	legacy := sign(store.User{ID: "88888888-8888-8888-8888-888888888888", Username: "legacy-root", Role: "admin"})
+	for _, p := range []string{"/api/admin/permissions", "/api/admin/settings"} {
+		if w := do(t, r, http.MethodGet, p, legacy); w.Code != http.StatusOK {
+			t.Errorf("老令牌 role=admin 访问 %s 应 200，实际 %d", p, w.Code)
+		}
+	}
+}
+

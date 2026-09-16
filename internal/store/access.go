@@ -87,6 +87,9 @@ func ExpandPermissions(groups []Group) []string {
 	return out
 }
 
+// WildcardPermission 是"全部权限"码（accounts 的 admin 组持有）。
+const WildcardPermission = "*"
+
 // HasPermission 判断权限集合是否命中某个码（* 视为全命中）。
 func HasPermission(perms []string, code string) bool {
 	for _, p := range perms {
@@ -95,6 +98,22 @@ func HasPermission(perms []string, code string) bool {
 		}
 	}
 	return false
+}
+
+// Can 报告身份是否持有权限码，是账号服务里唯一的授权断言（HTTP 闸门与 store 复核共用）。
+//
+// 令牌带 permissions 时一律以码为准（含 * 通配），此时角色不再额外放行——否则
+// "角色兜底"会变成绕过权限组的后门，或反过来让同一个管理动作在两个层次得到不同答案。
+// 只有完全没有 permissions 声明时（老令牌，或尚未按权限组配置的实例）才按历史 role
+// 兜底到 admin。与主仓库 catalog.User.Can 同口径（那边另有 editor 兜底实体编辑）。
+func Can(u *User, code string) bool {
+	if u == nil {
+		return false
+	}
+	if len(u.Permissions) > 0 {
+		return HasPermission(u.Permissions, code)
+	}
+	return u.Role == "admin"
 }
 
 // ── 实例设置 ──
@@ -179,7 +198,7 @@ func (s *Store) PublicSettings(ctx context.Context) (map[string]any, error) {
 // UpdateSettings 写入实例设置补丁。只接受已知键（避免前端写进垃圾键）；
 // 值按类型归一（布尔/整数/字符串数组），未知键报 invalid_setting。
 func (s *Store) UpdateSettings(ctx context.Context, patch map[string]any, actor *User) error {
-	if actor == nil || !HasPermission(actor.Permissions, "auth.settings.manage") {
+	if !Can(actor, "auth.settings.manage") {
 		return fmt.Errorf("forbidden")
 	}
 	norm := map[string]any{}
