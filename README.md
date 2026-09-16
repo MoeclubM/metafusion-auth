@@ -39,8 +39,32 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 | GET | `/api/admin/oauth/audits` | `auth.oauth.manage` | 授权审计（同意/拒绝与客户端管理动作，可按 `client_id` 过滤） |
 | GET | `/api/.well-known/openid-configuration`、`/.well-known/openid-configuration` | 匿名 | OIDC 发现文档（两个入口同一份内容，地址取自 issuer） |
 | GET | `/api/oidc/jwks`、`/.well-known/jwks.json` | 匿名 | 验签公钥（JWKS） |
+| GET | `/api/developer/overview` | 登录 | 开发者中心的接入配置：issuer、端点地址（authorize / token / userinfo / jwks / discovery）、`grant_types`、scope 四语说明、自有平台清单 |
+| GET | `/api/developer/apps` | 登录 | 我的应用（管理员看到全部）：归属、是否已核验、是否已配密钥 |
+| POST | `/api/developer/apps` | 登录 | 自助登记应用：归属调用者，返回一次性明文 `client_secret`；`trusted` / `disabled` / `verified` 由服务端置 false |
+| GET/PUT/DELETE | `/api/developer/apps/{id}` | 登录 + 归属 | 详情 / 局部更新（名称、简介、主页、回调白名单、scope 白名单）/ 删除；别人的应用按 404 处理 |
+| POST | `/api/developer/apps/{id}/rotate-secret` | 登录 + 归属 | 轮换该应用密钥，明文只返回一次，旧密钥立即失效 |
 
 限流：认证写入类接口按 IP 固定窗口 15 次/分钟，超限返回 429 与 `Retry-After`。
+
+## 开发者中心（应用自助登记）
+
+`/api/developer/*` 是独立开发者中心的接口：**任何登录账号**都能自助登记自己的应用（应用归属该账号），
+拿到 `client_id` / `client_secret` 后走标准授权码流程接入；平台自有的几个站点在 `/api/developer/overview`
+的 `platforms` 里单列，标明「免同意 + 已核验」。管理台（`/api/admin/oauth/*`，受 `auth.oauth.manage`）仍是
+平台管理员的治理面：核验第三方应用、提升自有平台、按客户端或按用户吊销令牌、查审计。
+
+- **归属**：`auth.oauth_clients.owner_user_id` 记录创建者。读 / 改 / 轮换 / 删四条路径共用同一判定
+  （创建者本人，或持 `auth.oauth.manage` 的管理员）；别人的应用一律返回 `client_not_found`（404），
+  不把「这个 client_id 已被占用」这个事实透给调用方。
+- **自有平台自动核验**：种子客户端（catalog / forum / resources）`trusted=true`、`verified=true`，
+  免同意且展示为已核验。开发者中心**写不了** `trusted` / `disabled` / `verified`——传了会被明确拒绝
+  （`invalid_field: app_managed_fields`），而不是静默忽略：免同意是平台自己的身份，不能由请求方声明。
+- **未核验提示**：第三方应用在同意页上多一条「该应用尚未通过核验」的提示；管理员核验后
+  （`PUT /api/admin/oauth/clients/{id}` 带 `verified=true`）提示消失。自有平台连同意页都不出现。
+- **配额**：每个账号最多 20 个应用（`store.MaxDeveloperAppsPerUser`），超限报 `app_quota_exceeded`；
+  管理员不受限（管理台代第三方登记的场景本就不该有上限）。
+- **密钥**：明文 secret 只在创建与轮换的响应里出现一次，库里只有 bcrypt 哈希，之后无处可取。
 
 ## OAuth 授权方（同意、scope 与吊销）
 

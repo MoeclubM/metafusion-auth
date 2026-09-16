@@ -37,18 +37,22 @@ type consentText struct {
 	AllowLbl    string
 	DenyLbl     string
 	Footnote    string
-	Scopes      map[string]consentScopeText
+	// UnverifiedNotice 是「该应用未通过核验」的提示：只对未核验的第三方应用出现，
+	// 自有平台（免同意）与已核验的应用都不显示这一行。
+	UnverifiedNotice string
+	Scopes           map[string]consentScopeText
 }
 
 var consentTexts = map[string]consentText{
 	"zh-CN": {
-		HTMLTitle:   "授权访问账号",
-		Heading:     "授权访问你的 MetaFusion 账号",
-		ClientLbl:   "请求方",
-		RedirectLbl: "授权后跳转回",
-		AllowLbl:    "同意并继续",
-		DenyLbl:     "拒绝",
-		Footnote:    "同意后授权码会发回上面的地址。你可以在账号页查看与撤销授权；管理员也可以在管理台吊销该客户端的令牌。",
+		HTMLTitle:        "授权访问账号",
+		Heading:          "授权访问你的 MetaFusion 账号",
+		ClientLbl:        "请求方",
+		RedirectLbl:      "授权后跳转回",
+		AllowLbl:         "同意并继续",
+		DenyLbl:          "拒绝",
+		UnverifiedNotice: "该应用尚未通过核验。请确认你信任它的来源，再决定是否授权。",
+		Footnote:         "同意后授权码会发回上面的地址。你可以在账号页查看与撤销授权；管理员也可以在管理台吊销该客户端的令牌。",
 		Scopes: map[string]consentScopeText{
 			"openid":  {Name: "确认你的身份", Desc: "返回你的账号 ID（sub）"},
 			"profile": {Name: "读取基本资料", Desc: "用户名与角色"},
@@ -56,13 +60,14 @@ var consentTexts = map[string]consentText{
 		},
 	},
 	"zh-TW": {
-		HTMLTitle:   "授權存取帳號",
-		Heading:     "授權存取你的 MetaFusion 帳號",
-		ClientLbl:   "請求方",
-		RedirectLbl: "授權後跳轉回",
-		AllowLbl:    "同意並繼續",
-		DenyLbl:     "拒絕",
-		Footnote:    "同意後授權碼會傳回上面的位址。你可以在帳號頁檢視與撤銷授權；管理員也可以在管理後台撤銷該用戶端的權杖。",
+		HTMLTitle:        "授權存取帳號",
+		Heading:          "授權存取你的 MetaFusion 帳號",
+		ClientLbl:        "請求方",
+		RedirectLbl:      "授權後跳轉回",
+		AllowLbl:         "同意並繼續",
+		DenyLbl:          "拒絕",
+		UnverifiedNotice: "此應用程式尚未通過驗證。請確認你信任它的來源，再決定是否授權。",
+		Footnote:         "同意後授權碼會傳回上面的位址。你可以在帳號頁檢視與撤銷授權；管理員也可以在管理後台撤銷該用戶端的權杖。",
 		Scopes: map[string]consentScopeText{
 			"openid":  {Name: "確認你的身分", Desc: "回傳你的帳號 ID（sub）"},
 			"profile": {Name: "讀取基本資料", Desc: "使用者名稱與角色"},
@@ -70,13 +75,14 @@ var consentTexts = map[string]consentText{
 		},
 	},
 	"ja-JP": {
-		HTMLTitle:   "アカウントへのアクセス許可",
-		Heading:     "MetaFusion アカウントへのアクセスを許可",
-		ClientLbl:   "要求元",
-		RedirectLbl: "許可後に戻る先",
-		AllowLbl:    "許可して続行",
-		DenyLbl:     "拒否",
-		Footnote:    "許可すると認可コードが上記のアドレスに返されます。アカウントページで確認・取り消しができ、管理者は管理画面でこのクライアントのトークンを取り消せます。",
+		HTMLTitle:        "アカウントへのアクセス許可",
+		Heading:          "MetaFusion アカウントへのアクセスを許可",
+		ClientLbl:        "要求元",
+		RedirectLbl:      "許可後に戻る先",
+		AllowLbl:         "許可して続行",
+		DenyLbl:          "拒否",
+		UnverifiedNotice: "このアプリはまだ検証されていません。提供元を信頼できるか確認してから許可してください。",
+		Footnote:         "許可すると認可コードが上記のアドレスに返されます。アカウントページで確認・取り消しができ、管理者は管理画面でこのクライアントのトークンを取り消せます。",
 		Scopes: map[string]consentScopeText{
 			"openid":  {Name: "本人確認", Desc: "アカウント ID（sub）を返します"},
 			"profile": {Name: "プロフィールの読み取り", Desc: "ユーザー名とロール"},
@@ -84,13 +90,14 @@ var consentTexts = map[string]consentText{
 		},
 	},
 	"en-US": {
-		HTMLTitle:   "Authorize account access",
-		Heading:     "Authorize access to your MetaFusion account",
-		ClientLbl:   "Requested by",
-		RedirectLbl: "Redirects to",
-		AllowLbl:    "Allow",
-		DenyLbl:     "Deny",
-		Footnote:    "An authorization code is sent back to the address above after you allow. You can review and revoke this authorization from your account page; an administrator can also revoke the client's tokens in the admin console.",
+		HTMLTitle:        "Authorize account access",
+		Heading:          "Authorize access to your MetaFusion account",
+		ClientLbl:        "Requested by",
+		RedirectLbl:      "Redirects to",
+		AllowLbl:         "Allow",
+		DenyLbl:          "Deny",
+		UnverifiedNotice: "This app has not been verified yet. Make sure you trust where it came from before you allow access.",
+		Footnote:         "An authorization code is sent back to the address above after you allow. You can review and revoke this authorization from your account page; an administrator can also revoke the client's tokens in the admin console.",
 		Scopes: map[string]consentScopeText{
 			"openid":  {Name: "Verify your identity", Desc: "Returns your account ID (sub)"},
 			"profile": {Name: "Read your basic profile", Desc: "Username and role"},
@@ -123,6 +130,8 @@ type consentView struct {
 	AllowURL    string
 	DenyURL     string
 	Footnote    string
+	// UnverifiedNotice 为空表示不显示提示条。
+	UnverifiedNotice string
 }
 
 // consentTextFor 按 Accept-Language 选文案：先按出现顺序做标签精确匹配，
@@ -177,6 +186,10 @@ func (h *Handler) renderConsent(c *gin.Context, client *store.OAuthClient, grant
 		DenyURL:     withConsent("deny"),
 		Footnote:    text.Footnote,
 	}
+	// 未核验提示只对第三方未核验应用出现：自有平台免同意、已核验应用都不需要这一行。
+	if !client.Trusted && !client.Verified {
+		view.UnverifiedNotice = text.UnverifiedNotice
+	}
 	for _, code := range granted {
 		item := text.Scopes[code]
 		view.Scopes = append(view.Scopes, consentScopeView{Code: code, Name: item.Name, Desc: item.Desc})
@@ -215,6 +228,8 @@ var consentTemplate = template.Must(template.New("consent").Parse(`<!doctype htm
   dl { margin: 0 0 1.1rem; font-size: .8rem; color: #a5a5b3 }
   dt { margin-top: .5rem }
   dd { margin: .15rem 0 0; color: #e8e8ef; word-break: break-all }
+  p.warn { margin: 0 0 1rem; padding: .5rem .75rem; border-radius: 10px; font-size: .8rem; line-height: 1.5;
+           background: rgba(245,158,11,.12); border: 1px solid rgba(245,158,11,.35); color: #fbbf24 }
   .row { display: flex; gap: .6rem }
   a.btn { flex: 1; text-align: center; text-decoration: none; padding: .6rem .75rem;
           border-radius: 10px; font-size: .9rem }
@@ -233,6 +248,7 @@ var consentTemplate = template.Must(template.New("consent").Parse(`<!doctype htm
     <dt>{{.ClientLbl}}</dt><dd>{{.ClientName}} ({{.ClientID}})</dd>
     <dt>{{.RedirectLbl}}</dt><dd>{{.RedirectURI}}</dd>
   </dl>
+  {{if .UnverifiedNotice}}<p class="warn">{{.UnverifiedNotice}}</p>{{end}}
   <div class="row">
     <a class="btn deny" href="{{.DenyURL}}" rel="nofollow">{{.DenyLbl}}</a>
     <a class="btn allow" href="{{.AllowURL}}" rel="nofollow">{{.AllowLbl}}</a>

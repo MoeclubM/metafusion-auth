@@ -216,10 +216,9 @@ func (h *Handler) accountPageBase() string {
 }
 
 func (h *Handler) discovery(c *gin.Context) {
-	base := strings.TrimSuffix(h.store.TokenIssuerURL(), "/")
-	if base == "" {
-		base = strings.TrimSuffix(c.Request.URL.Scheme+c.Request.Host, "/")
-	}
+	// 基址与开发者中心的 endpoints 同源（见 developer.go 的 issuerBase）：
+	// 两处各算一遍，迟早在反代/多域名下给出不一致的地址。
+	base := h.issuerBase(c)
 	c.JSON(http.StatusOK, gin.H{
 		"issuer":                                base,
 		"authorization_endpoint":                base + "/oauth/authorize",

@@ -30,6 +30,10 @@ var frozenRoutes = []string{
 	"GET /api/auth/invite",
 	"GET /api/auth/me",
 	"GET /api/auth/settings",
+	"GET /api/developer/apps",
+	"GET /api/developer/apps/:id",
+	"GET /api/developer/overview",
+	"DELETE /api/developer/apps/:id",
 	"GET /api/oauth/authorize",
 	"GET /api/oauth/clients",
 	"GET /api/oauth/userinfo",
@@ -50,6 +54,8 @@ var frozenRoutes = []string{
 	"POST /api/auth/logout-all",
 	"POST /api/auth/refresh",
 	"POST /api/auth/register",
+	"POST /api/developer/apps",
+	"POST /api/developer/apps/:id/rotate-secret",
 	"POST /api/oauth/token",
 	"POST /api/setup",
 	"PUT /api/admin/groups/:code",
@@ -58,6 +64,7 @@ var frozenRoutes = []string{
 	"PUT /api/admin/users/:id/groups",
 	"PUT /api/admin/users/:id/password",
 	"PUT /api/admin/users/:id/role",
+	"PUT /api/developer/apps/:id",
 	"PUT /api/auth/password",
 }
 

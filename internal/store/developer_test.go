@@ -20,7 +20,7 @@ func devStrsPtr(v ...string) *[]string { return &v }
 
 func TestDeveloperAppProjection(t *testing.T) {
 	// 自有平台：trusted 即第一方，核验状态由 trusted 派生（种子行未必写了 verified）。
-	first := developerAppOf(OAuthClient{ID: "metafusion-catalog", Name: "目录", Trusted: true, SecretHash: ""})
+	first := DeveloperAppOf(OAuthClient{ID: "metafusion-catalog", Name: "目录", Trusted: true, SecretHash: ""})
 	if !first.FirstParty || !first.Verified {
 		t.Fatalf("trusted 客户端应为自有平台且已核验: %+v", first)
 	}
@@ -28,7 +28,7 @@ func TestDeveloperAppProjection(t *testing.T) {
 		t.Fatal("无密钥的第一方不应报 has_secret")
 	}
 	// 第三方：first_party 必须为 false，verified 只看库里的列。
-	third := developerAppOf(OAuthClient{ID: "mfc-abc", Name: "第三方", Verified: false, SecretHash: "$2a$10$x"})
+	third := DeveloperAppOf(OAuthClient{ID: "mfc-abc", Name: "第三方", Verified: false, SecretHash: "$2a$10$x"})
 	if third.FirstParty || third.Verified {
 		t.Fatalf("未核验的第三方不应是自有平台或已核验: %+v", third)
 	}

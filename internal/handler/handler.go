@@ -26,9 +26,12 @@ type Handler struct {
 	// oauth 是 OAuth 端点使用的存储能力（生产环境就是下面的 store）。
 	// 抽成接口是为了让整条授权链路能在没有数据库的环境里用 httptest 跑完，见 oauth.go。
 	oauth oauthStore
+	// developer 是开发者中心的存储能力（生产环境同样是下面的 store）。
+	// 与 oauth 分开注入：两条路径的判定不同（一个按权限码，一个按应用归属）。
+	developer developerStore
 }
 
-func New(s *store.Store) *Handler { return &Handler{store: s, oauth: s} }
+func New(s *store.Store) *Handler { return &Handler{store: s, oauth: s, developer: s} }
 
 // Register 挂载全部路由。限流沿用主仓库的口径：只对认证写入类接口按 IP 固定窗口限流。
 func (h *Handler) Register(r *gin.Engine) {
@@ -37,6 +40,7 @@ func (h *Handler) Register(r *gin.Engine) {
 	api.Use(h.identity())
 	h.registerAuth(api, limiter)
 	h.registerOAuth(api, limiter)
+	h.registerDeveloper(api, limiter)
 
 	// OIDC 标准路径：
 	//   /.well-known/openid-configuration、/.well-known/jwks.json

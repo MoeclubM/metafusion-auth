@@ -26,7 +26,7 @@ func newOAuthTestServer(t *testing.T) (*gin.Engine, *store.Store, *fakeOAuth) {
 	_, s := newTestServer(t) // 复用进程内 RSA 密钥与签发器
 	fake := newFakeOAuth(s.Tokens)
 	r := gin.New()
-	(&Handler{store: s, oauth: fake}).Register(r)
+	(&Handler{store: s, oauth: fake, developer: fake}).Register(r)
 	return r, s, fake
 }
 
@@ -397,6 +397,7 @@ func TestConsentTextsCoverSupportedScopes(t *testing.T) {
 		for field, value := range map[string]string{
 			"heading": text.Heading, "client_label": text.ClientLbl, "redirect_label": text.RedirectLbl,
 			"allow": text.AllowLbl, "deny": text.DenyLbl, "footnote": text.Footnote,
+			"unverified_notice": text.UnverifiedNotice,
 		} {
 			if strings.TrimSpace(value) == "" {
 				t.Fatalf("%s 的 %s 文案为空", lang, field)
@@ -405,5 +406,40 @@ func TestConsentTextsCoverSupportedScopes(t *testing.T) {
 	}
 	if len(consentTexts) != 4 {
 		t.Fatalf("同意页文案应为四语（与前端字典一致），实际 %d 种", len(consentTexts))
+	}
+}
+
+// 未核验的第三方应用必须在同意页上被点出来；核验之后这一行消失。
+// 自有平台（trusted）连同意页都不出现，因此永远不需要这条提示。
+func TestConsentPageMarksUnverifiedApp(t *testing.T) {
+	r, s, fake := newOAuthTestServer(t)
+	fake.addClient("third-party", "未核验站点", []string{chainCallback}, []string{"openid"}, false, "s3cret-value")
+	user := store.User{ID: "77777777-7777-7777-7777-777777777777", Username: "kana", Role: "user"}
+	fake.addUser(user)
+	bearer := signBearer(t, s, user)
+	query := "client_id=third-party&redirect_uri=" + url.QueryEscape(chainCallback) + "&response_type=code&scope=openid"
+
+	w := authorize(t, r, bearer, query)
+	if w.Code != http.StatusOK {
+		t.Fatalf("未表态时应出同意页，实际 %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "该应用尚未通过核验") {
+		t.Fatalf("未核验应用应显示提示：%s", w.Body.String())
+	}
+
+	fake.markVerified("third-party")
+	w = authorize(t, r, bearer, query)
+	if w.Code != http.StatusOK {
+		t.Fatalf("已核验应用同样要用户表态，实际 %d", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "尚未通过核验") {
+		t.Fatal("已核验应用不应再显示未核验提示")
+	}
+
+	// 自有平台：免同意直接发码，不渲染同意页。
+	fake.addClient("first-party", "自家平台", []string{chainCallback}, []string{"openid"}, true, "")
+	w = authorize(t, r, bearer, "client_id=first-party&redirect_uri="+url.QueryEscape(chainCallback)+"&response_type=code&scope=openid")
+	if w.Code != http.StatusFound {
+		t.Fatalf("自有平台应免同意直接回跳，实际 %d：%s", w.Code, w.Body.String())
 	}
 }

@@ -24,6 +24,7 @@ type fakeOAuth struct {
 	mu      sync.Mutex
 	clients map[string]store.OAuthClient
 	secrets map[string]string // client_id → bcrypt 哈希（空串 = 无密钥第一方）
+	owners  map[string]string // client_id → 归属用户 id（空串 = 平台登记，见 developer_fake_test.go）
 	users   map[string]store.User
 	codes   map[string]fakeCode
 	issued  map[string]fakeToken
@@ -53,6 +54,7 @@ func newFakeOAuth(tokens *store.TokenIssuer) *fakeOAuth {
 		tokens:  tokens,
 		clients: map[string]store.OAuthClient{},
 		secrets: map[string]string{},
+		owners:  map[string]string{},
 		users:   map[string]store.User{},
 		codes:   map[string]fakeCode{},
 		issued:  map[string]fakeToken{},

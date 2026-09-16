@@ -58,7 +58,7 @@ func (in DeveloperAppInput) ToClientInput() OAuthClientInput {
 	}
 }
 
-func developerAppOf(c OAuthClient) DeveloperApp {
+func DeveloperAppOf(c OAuthClient) DeveloperApp {
 	return DeveloperApp{
 		ID: c.ID, Name: c.Name, Description: c.Description, HomepageURL: c.HomepageURL,
 		RedirectURIs: c.RedirectURIs, Scopes: c.Scopes,
@@ -67,17 +67,25 @@ func developerAppOf(c OAuthClient) DeveloperApp {
 	}
 }
 
-// requireAppEditable 判定"这个人能改这个应用吗"：创建者本人，或持 auth.oauth.manage 的管理员。
-// 别人的应用一律返回 client_not_found（不是 forbidden）：403 会把"这个 id 确实被别人占了"
-// 这个事实透给调用方，而应用 id 是唯一需要保密的标识。
+// CanEditApp 判定"这个人能改这个应用吗"：创建者本人，或持 auth.oauth.manage 的管理员。
+// 导出是给内存替身用的：归属规则只此一处，替身不能自成一套。
+func CanEditApp(actor *User, ownerID string) bool {
+	if actor == nil {
+		return false
+	}
+	if canManageOAuth(actor) {
+		return true
+	}
+	return ownerID != "" && ownerID == actor.ID
+}
+
+// requireAppEditable 把 CanEditApp 翻成对外错误码。别人的应用一律 client_not_found（不是 forbidden）：
+// 403 会把"这个 id 确实被别人占了"这个事实透给调用方，而应用 id 是唯一需要保密的标识。
 func requireAppEditable(actor *User, app *OAuthClient) error {
 	if actor == nil {
 		return fmt.Errorf("authentication_required")
 	}
-	if canManageOAuth(actor) {
-		return nil
-	}
-	if app.OwnerID != "" && app.OwnerID == actor.ID {
+	if CanEditApp(actor, app.OwnerID) {
 		return nil
 	}
 	return fmt.Errorf("client_not_found")
@@ -107,7 +115,7 @@ func (s *Store) ListDeveloperApps(ctx context.Context, actor *User) ([]Developer
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, developerAppOf(c))
+		out = append(out, DeveloperAppOf(c))
 	}
 	return out, rows.Err()
 }
@@ -126,7 +134,7 @@ func (s *Store) ListPlatformApps(ctx context.Context) ([]DeveloperApp, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, developerAppOf(c))
+		out = append(out, DeveloperAppOf(c))
 	}
 	return out, rows.Err()
 }
@@ -140,7 +148,7 @@ func (s *Store) GetDeveloperApp(ctx context.Context, id string, actor *User) (*D
 	if err := requireAppEditable(actor, client); err != nil {
 		return nil, err
 	}
-	app := developerAppOf(*client)
+	app := DeveloperAppOf(*client)
 	return &app, nil
 }
 
@@ -158,7 +166,7 @@ func (s *Store) CreateDeveloperApp(ctx context.Context, in DeveloperAppInput, ac
 	if err != nil {
 		return DeveloperApp{}, "", err
 	}
-	return developerAppOf(client), secret, nil
+	return DeveloperAppOf(client), secret, nil
 }
 
 // checkDeveloperAppQuota 判定配额：管理员不受限（管理台代第三方登记的场景本就不该有上限）。
@@ -186,7 +194,7 @@ func (s *Store) UpdateDeveloperApp(ctx context.Context, id string, in DeveloperA
 	if err != nil {
 		return DeveloperApp{}, err
 	}
-	return developerAppOf(client), nil
+	return DeveloperAppOf(client), nil
 }
 
 // RotateDeveloperAppSecret 轮换自己应用的密钥：明文只返回一次，旧密钥立即失效。
@@ -197,7 +205,7 @@ func (s *Store) RotateDeveloperAppSecret(ctx context.Context, id string, actor *
 	if err != nil {
 		return DeveloperApp{}, "", err
 	}
-	return developerAppOf(client), secret, nil
+	return DeveloperAppOf(client), secret, nil
 }
 
 // DeleteDeveloperApp 删除自己登记的应用：授权码与令牌随外键级联删除。
@@ -217,5 +225,5 @@ func (s *Store) SetDeveloperAppVerified(ctx context.Context, id string, verified
 	if err != nil {
 		return DeveloperApp{}, err
 	}
-	return developerAppOf(client), nil
+	return DeveloperAppOf(client), nil
 }
