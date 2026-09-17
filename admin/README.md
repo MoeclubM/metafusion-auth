@@ -81,7 +81,7 @@ curl -s localhost:3000/admin/account/api/health   # {"ok":true,"service":"auth-a
 | `/` | 用户治理：列表 / 搜索 / 改角色 / 改密码 / 封禁解封 / 权限组分配 | `auth.users.manage`（组清单另需 `auth.groups.manage`） |
 | `/groups` | 权限组：列表、新建 / 编辑 / 删除、权限码说明 | `auth.groups.manage` |
 | `/invites` | 邀请：台账、创建、吊销、使用情况 | `auth.invites.manage` |
-| `/oauth-clients` | OAuth 客户端：列表、创建（一次性密钥）、轮换、停用、删除 | `auth.oauth.manage` |
+| `/oauth-clients` | OAuth 客户端：按归属分两组列出（系统应用 / 第三方应用）、创建（一次性密钥）、核验 / 取消核验、轮换、停用、删除 | `auth.oauth.manage` |
 | `/instance` | 实例与设置：只读展示实例设置与当前身份 | `auth.settings.manage` |
 
 前端**不发明**任何接口：每一条请求都对应账号服务已有的 `/api/auth/*`、`/api/admin/*`
@@ -89,13 +89,19 @@ curl -s localhost:3000/admin/account/api/health   # {"ok":true,"service":"auth-a
 
 ## 边界与安全
 
-- **破坏性动作都要二次确认**：改角色、封禁/解封、删除权限组、删除客户端、停用客户端、轮换密钥、吊销邀请码。
+- **破坏性动作都要二次确认**：改角色、封禁/解封、删除权限组、删除客户端、停用客户端、轮换密钥、吊销邀请码，
+  以及核验 / 取消核验（它改的是同意页对外的表达，所以两个方向都确认一次）。
 - **改角色会清空该用户手工分配的权限组**（服务端 `UpdateUserRole` 按 `RoleToGroups` 重建成员关系）：
   界面上直接写明，并在提交前锁住组选择、改角色单独确认一次。
 - **403 按块降级**：每个面板各自取数，任一接口 403 只让那一块换成「没有进入这一块的权限」说明卡，
   页面其余部分照常可用；上游不可达给的是「账号服务不可达 + 重试」，不是空列表。
 - 明文 `client_secret` 只在创建/轮换的响应里出现一次（库里只有 bcrypt 哈希），
   界面弹一次「请立即保存」并说明关掉后只能轮换。
+- **系统应用与第三方应用按归属分界**（`auth.oauth_clients.owner_user_id` 为空 = 平台登记的系统应用，
+  这个字段是管理面列表真实返回的；列表里没有 `first_party`，判定见 `src/lib/endpoints.ts` 的 `isSystemClient`）：
+  系统应用只能在本管理台维护，开发者中心按归属过滤、看不到它们；第三方应用由各账号在开发者中心自助登记，
+  核验 / 停用 / 轮换 / 删除仍由本管理台统一治理（`trusted`/`disabled`/`verified` 在 `/api/developer/*` 上写不了）。
+  管理台建的客户端归属恒为空，所以创建表单里没有「归属给某个账号」这个选项。
 - 账号封禁不是打标记：会话、第三方令牌、未兑换授权码一并删除，验签立即拒绝——确认对话框里写清了。
 
 ## 设计 token
