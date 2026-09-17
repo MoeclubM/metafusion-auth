@@ -1,7 +1,9 @@
 package handler
 
-// OAuth 2.0 / OIDC 授权方端点：客户端列表、授权码流程、换令牌、userinfo，
-// 以及发现文档与 JWKS。路径与请求/响应形状与主仓库 catalog 包逐字一致，
+// OAuth 2.0 / OIDC 授权方端点：授权码流程、换令牌、userinfo，以及发现文档与 JWKS。
+// 客户端列表**不在这里**：全量列表只在管理面（/api/admin/oauth/clients，受 auth.oauth.manage），
+// 过去那个登录即可枚举全部 client_id / 回调地址 / 归属的 GET /api/oauth/clients 已删除。
+// 路径与请求/响应形状与主仓库 catalog 包逐字一致，
 // 切流时前端与第三方客户端都不需要改动；两个入口的发现文档内容完全相同。
 
 import (
@@ -42,12 +44,6 @@ var _ oauthStore = (*store.Store)(nil)
 func (h *Handler) registerOAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 	s := h.oauth
 	oauth := api.Group("/oauth")
-	// 客户端列表不含密钥哈希（SecretHash json:"-"），但仍需登录后可读，
-	// 避免匿名枚举 client_id/redirect_uris。
-	oauth.GET("/clients", requireUser(false), func(c *gin.Context) {
-		clients, err := s.ListOAuthClients(c.Request.Context())
-		respond(c, gin.H{"clients": clients}, err)
-	})
 	oauth.GET("/authorize", limiter, func(c *gin.Context) {
 		clientID := c.Query("client_id")
 		redirectURI := c.Query("redirect_uri")

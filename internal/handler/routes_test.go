@@ -37,7 +37,6 @@ var frozenRoutes = []string{
 	"GET /api/developer/overview",
 	"DELETE /api/developer/apps/:id",
 	"GET /api/oauth/authorize",
-	"GET /api/oauth/clients",
 	"GET /api/oauth/userinfo",
 	"GET /api/oidc/jwks",
 	"GET /api/setup",

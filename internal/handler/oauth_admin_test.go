@@ -105,18 +105,20 @@ func TestOAuthClientCreateReturnsSecretOnce(t *testing.T) {
 	if len(created.ClientSecret) != 43 {
 		t.Fatalf("明文密钥长度 = %d，期望 43：%q", len(created.ClientSecret), created.ClientSecret)
 	}
-	// 列表接口（管理面与既有登录后列表）都不得出现明文或哈希。
-	for _, path := range []string{"/api/admin/oauth/clients", "/api/oauth/clients"} {
-		w = doJSON(t, r, http.MethodGet, path, opsBearer, "")
-		if w.Code != http.StatusOK {
-			t.Fatalf("读 %s 失败: %d %s", path, w.Code, w.Body.String())
-		}
-		if strings.Contains(w.Body.String(), created.ClientSecret) {
-			t.Fatalf("%s 泄露了明文密钥", path)
-		}
-		if strings.Contains(w.Body.String(), "$2") || strings.Contains(w.Body.String(), "secret_hash") {
-			t.Fatalf("%s 泄露了密钥哈希", path)
-		}
+	// 管理面列表不得出现明文或哈希。
+	w = doJSON(t, r, http.MethodGet, "/api/admin/oauth/clients", opsBearer, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("读管理面列表失败: %d %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), created.ClientSecret) {
+		t.Fatal("管理面列表泄露了明文密钥")
+	}
+	if strings.Contains(w.Body.String(), "$2") || strings.Contains(w.Body.String(), "secret_hash") {
+		t.Fatal("管理面列表泄露了密钥哈希")
+	}
+	// 旧的"登录即可枚举全部客户端"接口已删除：连管理员也不该再从这个路径拿到全量清单。
+	if w := doJSON(t, r, http.MethodGet, "/api/oauth/clients", opsBearer, ""); w.Code != http.StatusNotFound {
+		t.Fatalf("登录可枚举的 /api/oauth/clients 必须已删除，实际 %d：%s", w.Code, w.Body.String())
 	}
 	// 非法输入：通配回调、越权 scope、重名 id、非法 id、空名
 	for _, tc := range []struct{ name, body, wantErr string }{

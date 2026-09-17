@@ -198,8 +198,12 @@ func TestOAuthChainAgainstPostgres(t *testing.T) {
 	if w := doJSON(t, r, http.MethodDelete, "/api/admin/oauth/clients/"+clientID, adminBearer, ""); w.Code != http.StatusOK {
 		t.Fatalf("删除: %d %s", w.Code, w.Body.String())
 	}
-	if w := doJSON(t, r, http.MethodGet, "/api/oauth/clients", memberBearer, ""); w.Code != http.StatusOK || strings.Contains(w.Body.String(), clientID) {
-		t.Fatalf("删除后列表里不应再出现该客户端: %d %s", w.Code, w.Body.String())
+	if w := doJSON(t, r, http.MethodGet, "/api/admin/oauth/clients", adminBearer, ""); w.Code != http.StatusOK || strings.Contains(w.Body.String(), clientID) {
+		t.Fatalf("删除后管理面列表里不应再出现该客户端: %d %s", w.Code, w.Body.String())
+	}
+	// 登录即可枚举全量客户端的旧接口已删除：普通成员连 404 都拿不到任何客户端信息。
+	if w := doJSON(t, r, http.MethodGet, "/api/oauth/clients", memberBearer, ""); w.Code != http.StatusNotFound {
+		t.Fatalf("登录可枚举的 /api/oauth/clients 必须已删除，实际 %d：%s", w.Code, w.Body.String())
 	}
 }
 

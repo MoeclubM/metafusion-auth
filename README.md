@@ -41,7 +41,6 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 | GET/POST | `/api/admin/groups` | `auth.groups.manage` | 权限组列表（`items`）/ 新建 |
 | PUT/DELETE | `/api/admin/groups/{code}` | `auth.groups.manage` | 更新 / 删除权限组 |
 | GET | `/api/admin/permissions` | `auth.groups.manage` | 权限码清单（`items`），供管理台按域展示可授予的码 |
-| GET | `/api/oauth/clients` | 登录 | OAuth 客户端列表（不含密钥哈希；响应形状与切流前逐字一致） |
 | GET | `/api/oauth/authorize` | 登录 | 授权码流程：校验 client 与 redirect_uri 白名单、校验并收敛 scope；已登录但未表态时渲染同意页，`consent=allow` 才发码，`consent=deny` 带 `error=access_denied` 回跳；`trusted` 客户端跳过同意页。PKCE 支持 `S256`/`plain` |
 | POST | `/api/oauth/token` | 匿名 | 授权码换令牌（表单或 JSON），响应含收敛后的 `scope`、真实 `expires_in` 与 `id_token`（aud 指向客户端） |
 | GET | `/api/oauth/userinfo` | 令牌 | OIDC 用户信息（以 `auth.oauth_tokens` 的存活行为准，令牌被吊销/客户端停用后立即 401） |
@@ -148,8 +147,10 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 创建、更新、轮换、删除、`tokens_revoked`，含 actor、client_id、scope 与时间。同意动作在发码**之前**写入，
 写失败即拒绝授权（不允许出现"码发了却查不到同意记录"）。
 
-**接口形状**：管理面客户端列表返回 `items`（沿用管理台约定），登录可读的 `/api/oauth/clients`
-仍返回 `clients`，两者都保留；客户端对象新增 `scopes`、`disabled` 字段（追加，不改既有字段）。
+**接口形状**：客户端列表只在管理面 `GET /api/admin/oauth/clients`（返回 `items`，受
+`auth.oauth.manage`）；过去那个"登录即可读全量客户端"的 `GET /api/oauth/clients` 已删除——它会把
+任何登录账号不拥有的 client_id、回调地址、scope 与归属一并回出去。客户端对象含 `scopes`、
+`disabled`、`verified` 等字段（追加，不改既有字段）。
 
 ## 令牌与密钥
 
