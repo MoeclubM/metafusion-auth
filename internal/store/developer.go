@@ -7,8 +7,14 @@ package store
 // （oauth_clients.owner_user_id）。两条路径共用 oauth.go 的同一份校验与写入实现，
 // 差别只在传进去的那一个判定函数。
 //
+// 开发者面**只服务自有应用**：列表与读 / 改 / 轮换 / 删一律只认"归属 = 当前账号"，不看角色。
+// 管理员要看、要改全部客户端，走的是管理面 /api/admin/oauth/clients*（全量治理 + 权限码），
+// 开发者面没有再给第二份的理由：管理员在这里看到系统应用与别人的应用，等于把管理面能力
+// 泄漏到自助面（那里连种子客户端的删除保护都没有，轮换更是无保护）。
+//
 // 刻意保留的边界：开发者中心**写不了管理面字段**（trusted / disabled / verified），
-// 也不能把自己登记的应用变成"自有平台"。免同意是平台自己的身份，不能由请求方声明。
+// 也不能把自己登记的应用变成"自有平台"。免同意是平台自己的身份，不能由请求方声明；
+// 核验同理，只在管理面做（PUT /api/admin/oauth/clients/{id} 带 verified）。
 
 import (
 	"context"
@@ -67,14 +73,15 @@ func DeveloperAppOf(c OAuthClient) DeveloperApp {
 	}
 }
 
-// CanEditApp 判定"这个人能改这个应用吗"：创建者本人，或持 auth.oauth.manage 的管理员。
+// CanEditApp 判定"这个人能动这个应用吗"：**只认创建者本人**。
+//
+// 刻意不为 auth.oauth.manage 开分支：管理台的全量治理是另一条路径上的另一份判定
+// （UpdateOAuthClient 等直接判权限码），开发者面不该借道。曾经开过这个分支，
+// 后果是管理员在开发者中心看到并改动系统应用与别人的应用。
 // 导出是给内存替身用的：归属规则只此一处，替身不能自成一套。
 func CanEditApp(actor *User, ownerID string) bool {
 	if actor == nil {
 		return false
-	}
-	if canManageOAuth(actor) {
-		return true
 	}
 	return ownerID != "" && ownerID == actor.ID
 }
@@ -91,20 +98,17 @@ func requireAppEditable(actor *User, app *OAuthClient) error {
 	return fmt.Errorf("client_not_found")
 }
 
-// ListDeveloperApps 列出"我的应用"：管理员看到全部（含平台登记与其余开发者登记的应用，
-// 便于排查），普通账号只看得到归属自己的那些。
+// ListDeveloperApps 列出"我的应用"：**永远**只回归属当前账号的那些，不分角色。
+//
+// 条件里必须有 owner_user_id=$1（NULL 永不等于任何值，顺带把 owner 为空的系统应用挡在外面）：
+// 管理员的全量视图在管理台（GET /api/admin/oauth/clients），不需要第二份。
 func (s *Store) ListDeveloperApps(ctx context.Context, actor *User) ([]DeveloperApp, error) {
 	if actor == nil {
 		return nil, fmt.Errorf("authentication_required")
 	}
-	q := "SELECT " + clientColumns + " FROM auth.oauth_clients c LEFT JOIN auth.users u ON u.id=c.owner_user_id"
-	args := []any{}
-	if !canManageOAuth(actor) {
-		q += " WHERE c.owner_user_id=$1"
-		args = append(args, actor.ID)
-	}
-	q += " ORDER BY c.created_at DESC, c.id"
-	rows, err := s.DB.QueryContext(ctx, q, args...)
+	q := "SELECT " + clientColumns + " FROM auth.oauth_clients c LEFT JOIN auth.users u ON u.id=c.owner_user_id" +
+		" WHERE c.owner_user_id=$1 ORDER BY c.created_at DESC, c.id"
+	rows, err := s.DB.QueryContext(ctx, q, actor.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +143,7 @@ func (s *Store) ListPlatformApps(ctx context.Context) ([]DeveloperApp, error) {
 	return out, rows.Err()
 }
 
-// GetDeveloperApp 读单个应用；非本人且非管理员按"不存在"返回（见 requireAppEditable）。
+// GetDeveloperApp 读单个应用；不是自己的按"不存在"返回（见 requireAppEditable）。
 func (s *Store) GetDeveloperApp(ctx context.Context, id string, actor *User) (*DeveloperApp, error) {
 	client, err := s.GetOAuthClient(ctx, id)
 	if err != nil {
@@ -169,11 +173,12 @@ func (s *Store) CreateDeveloperApp(ctx context.Context, in DeveloperAppInput, ac
 	return DeveloperAppOf(client), secret, nil
 }
 
-// checkDeveloperAppQuota 判定配额：管理员不受限（管理台代第三方登记的场景本就不该有上限）。
+// checkDeveloperAppQuota 判定配额：每个账号一视同仁，管理员也不例外。
+//
+// 曾经给管理员开了免检分支，理由是"管理台代第三方登记"——那条路根本不走这里（管理台直接
+// 调 CreateOAuthClient），于是这个分支只影响"管理员用开发者中心给自己刷应用"。开发者面
+// 既然对所有角色只有一条规则（只看 / 只改归属自己的），配额就一并拉平：要批量登记走管理面。
 func (s *Store) checkDeveloperAppQuota(ctx context.Context, actor *User) error {
-	if canManageOAuth(actor) {
-		return nil
-	}
 	var n int
 	if err := s.DB.QueryRowContext(ctx, "SELECT count(*) FROM auth.oauth_clients WHERE owner_user_id=$1", actor.ID).Scan(&n); err != nil {
 		return err
@@ -215,15 +220,5 @@ func (s *Store) DeleteDeveloperApp(ctx context.Context, id string, actor *User) 
 	})
 }
 
-// SetDeveloperAppVerified 是管理员的核验动作（要求 auth.oauth.manage）：第三方应用经核验后，
-// 同意页不再显示"未核验应用"提示。自有平台的核验由 trusted 表达，不在这里改。
-func (s *Store) SetDeveloperAppVerified(ctx context.Context, id string, verified bool, actor *User) (DeveloperApp, error) {
-	if !canManageOAuth(actor) {
-		return DeveloperApp{}, fmt.Errorf("forbidden")
-	}
-	client, err := s.updateOAuthClient(ctx, id, OAuthClientInput{Verified: &verified}, actor, true, nil)
-	if err != nil {
-		return DeveloperApp{}, err
-	}
-	return DeveloperAppOf(client), nil
-}
+// 核验（verified）没有这里的入口：它是管理面的动作，走 PUT /api/admin/oauth/clients/{id}
+// → Store.UpdateOAuthClient。开发者面只读出核验结果（DeveloperApp.Verified），不写。

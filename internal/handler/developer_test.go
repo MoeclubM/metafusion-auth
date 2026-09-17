@@ -92,9 +92,36 @@ func TestDeveloperAppRegistrationAndOwnership(t *testing.T) {
 		t.Fatalf("越权改名不得生效: %q", name)
 	}
 
-	// 管理员（auth.oauth.manage）能看，能改。
-	if w := doJSON(t, r, http.MethodGet, "/api/developer/apps/"+created.App.ID, adminBearer, ""); w.Code != http.StatusOK {
-		t.Fatalf("管理员应能读任意应用，实际 %d", w.Code)
+	// 管理员在开发者面**不是例外**：别人的应用读 / 改 / 轮换 / 删一律按"不存在"，
+	// 且内存里的行一字未动（密钥哈希也没变——轮换若能过，哈希必然变）。
+	// 他的全量治理能力在管理面（/api/admin/oauth/clients*），本节末尾就是同一批断言的对照。
+	beforeProbe := fake.clients[created.App.ID]
+	beforeSecret := fake.secrets[created.App.ID]
+	for _, tc := range []struct{ method, path, body string }{
+		{http.MethodGet, "/api/developer/apps/" + created.App.ID, ""},
+		{http.MethodPut, "/api/developer/apps/" + created.App.ID, "{\"name\":\"管理员改名\"}"},
+		{http.MethodPost, "/api/developer/apps/" + created.App.ID + "/rotate-secret", ""},
+		{http.MethodDelete, "/api/developer/apps/" + created.App.ID, ""},
+	} {
+		if w := doJSON(t, r, tc.method, tc.path, adminBearer, tc.body); w.Code != http.StatusNotFound {
+			t.Fatalf("管理员 %s %s 也应 404，实际 %d：%s", tc.method, tc.path, w.Code, w.Body.String())
+		}
+	}
+	if after := fake.clients[created.App.ID]; after.Name != beforeProbe.Name || fake.secrets[created.App.ID] != beforeSecret {
+		t.Fatalf("管理员的越权请求不得改动任何字段: before=%+v after=%+v", beforeProbe, after)
+	}
+
+	// 管理面（auth.oauth.manage）仍然能读能改同一个应用：收口没有误伤管理能力。
+	if w := doJSON(t, r, http.MethodGet, "/api/admin/oauth/clients", adminBearer, ""); w.Code != http.StatusOK {
+		t.Fatalf("管理面列表应 200，实际 %d：%s", w.Code, w.Body.String())
+	} else if !strings.Contains(w.Body.String(), created.App.ID) {
+		t.Fatalf("管理面列表必须仍能看到这个应用：%s", w.Body.String())
+	}
+	if w := doJSON(t, r, http.MethodPut, "/api/admin/oauth/clients/"+created.App.ID, adminBearer, "{\"verified\":true}"); w.Code != http.StatusOK {
+		t.Fatalf("管理面核验应 200，实际 %d：%s", w.Code, w.Body.String())
+	}
+	if !fake.clients[created.App.ID].Verified {
+		t.Fatal("管理面核验必须落到客户端上")
 	}
 
 	// 本人的合法更新与非法主页。
@@ -112,7 +139,9 @@ func TestDeveloperAppRegistrationAndOwnership(t *testing.T) {
 		t.Fatalf("非法主页应 400 invalid_homepage_url，实际 %d：%s", w.Code, w.Body.String())
 	}
 
-	// 列表只含自己的应用。
+	// 列表只含自己的应用。先塞一个平台自有客户端（trusted + 无归属）：它在开发者面
+	// 对任何人都不可见——系统应用归管理台管。
+	fake.addClient("metafusion-catalog", "MetaFusion 目录", []string{"https://findverse.cc/auth/callback"}, []string{"openid"}, true, "")
 	w = doJSON(t, r, http.MethodGet, "/api/developer/apps", ownerBearer, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("列表应 200，实际 %d", w.Code)
@@ -131,6 +160,18 @@ func TestDeveloperAppRegistrationAndOwnership(t *testing.T) {
 	decodeInto(t, w, &others)
 	if len(others.Items) != 0 {
 		t.Fatalf("别人的列表不应看到别人的应用: %+v", others.Items)
+	}
+	// 管理员在开发者面也只有自己的应用；系统应用（无归属）对他同样不可见。
+	w = doJSON(t, r, http.MethodGet, "/api/developer/apps", adminBearer, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("管理员列表应 200，实际 %d", w.Code)
+	}
+	var adminApps struct {
+		Items []store.DeveloperApp `json:"items"`
+	}
+	decodeInto(t, w, &adminApps)
+	if len(adminApps.Items) != 0 {
+		t.Fatalf("管理员在开发者中心不该看到任何应用（他没登记过，系统应用也不该出现）: %+v", adminApps.Items)
 	}
 }
 

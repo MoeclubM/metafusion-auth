@@ -16,6 +16,8 @@ import (
 
 func devStrPtr(s string) *string { return &s }
 
+func devBoolPtr(v bool) *bool { return &v }
+
 func devStrsPtr(v ...string) *[]string { return &v }
 
 func TestDeveloperAppProjection(t *testing.T) {
@@ -147,6 +149,37 @@ func TestDeveloperCenterAgainstPostgres(t *testing.T) {
 		t.Fatalf("越权改名被拒后名字不应变化: name=%q err=%v", name, err)
 	}
 
+	// 管理员在开发者面同样动不了别人的应用：读 / 改 / 轮换 / 删都按"不存在"，
+	// 且库里一行没变（含密钥哈希——轮换若能过，哈希必然变）。管理员的"能改全部"只在管理面。
+	beforeProbe, err := s.GetOAuthClient(ctx, app.ID)
+	if err != nil {
+		t.Fatalf("读探测前快照: %v", err)
+	}
+	for name, err := range map[string]error{
+		"读": func() error { _, err := s.GetDeveloperApp(ctx, app.ID, &admin); return err }(),
+		"改": func() error {
+			_, err := s.UpdateDeveloperApp(ctx, app.ID, DeveloperAppInput{Name: devStrPtr("管理员改名")}, &admin)
+			return err
+		}(),
+		"轮换": func() error { _, _, err := s.RotateDeveloperAppSecret(ctx, app.ID, &admin); return err }(),
+		"删":  s.DeleteDeveloperApp(ctx, app.ID, &admin),
+	} {
+		if err == nil || err.Error() != "client_not_found" {
+			t.Fatalf("管理员%s别人的应用应报 client_not_found，实际 err=%v", name, err)
+		}
+	}
+	afterProbe, err := s.GetOAuthClient(ctx, app.ID)
+	if err != nil {
+		t.Fatalf("读探测后快照: %v", err)
+	}
+	if afterProbe.Name != beforeProbe.Name || afterProbe.SecretHash != beforeProbe.SecretHash ||
+		strings.Join(afterProbe.RedirectURIs, " ") != strings.Join(beforeProbe.RedirectURIs, " ") ||
+		strings.Join(afterProbe.Scopes, " ") != strings.Join(beforeProbe.Scopes, " ") ||
+		afterProbe.Verified != beforeProbe.Verified || afterProbe.Disabled != beforeProbe.Disabled ||
+		afterProbe.OwnerID != beforeProbe.OwnerID {
+		t.Fatalf("管理员的越权请求不得改动任何字段: before=%+v after=%+v", beforeProbe, afterProbe)
+	}
+
 	// 本人的合法改动：改名 / 简介 / 主页都能落库；非法主页必须被拒。
 	if app, err = s.UpdateDeveloperApp(ctx, app.ID, DeveloperAppInput{Name: devStrPtr("示例站点（改名）"), HomepageURL: devStrPtr("https://new.example")}, &member); err != nil {
 		t.Fatalf("本人改名: %v", err)
@@ -158,34 +191,46 @@ func TestDeveloperCenterAgainstPostgres(t *testing.T) {
 		t.Fatalf("非法主页必须被拒，实际 err=%v", err)
 	}
 
-	// 核验只有管理员能做；核验后 developer 投影与库里的列都要变。
-	if _, err = s.SetDeveloperAppVerified(ctx, app.ID, true, &member); err == nil || err.Error() != "forbidden" {
-		t.Fatalf("普通成员核验应 403，实际 err=%v", err)
+	// 核验只有管理员能做，且只有管理面那条路径（PUT /api/admin/oauth/clients/{id} 的 verified）；
+	// 开发者面的写入形状里没有这个字段（见 TestDeveloperUpdateRejectsManagedFields）。
+	if _, err = s.UpdateOAuthClient(ctx, app.ID, OAuthClientInput{Verified: devBoolPtr(true)}, &member); err == nil || err.Error() != "forbidden" {
+		t.Fatalf("普通成员走管理面核验应 forbidden，实际 err=%v", err)
 	}
-	if app, err = s.SetDeveloperAppVerified(ctx, app.ID, true, &admin); err != nil {
+	if _, err = s.UpdateOAuthClient(ctx, app.ID, OAuthClientInput{Verified: devBoolPtr(true)}, &admin); err != nil {
 		t.Fatalf("管理员核验: %v", err)
 	}
-	if !app.Verified || app.FirstParty {
-		t.Fatalf("核验后应已核验但仍非自有平台: %+v", app)
+	verifiedApp, err := s.GetDeveloperApp(ctx, app.ID, &member)
+	if err != nil {
+		t.Fatalf("本人读核验后的应用: %v", err)
+	}
+	if !verifiedApp.Verified || verifiedApp.FirstParty {
+		t.Fatalf("核验后应已核验但仍非自有平台: %+v", verifiedApp)
 	}
 
-	// 列表：成员只看得到自己的应用；管理员看得到全部（含别人登记的）。
+	// 列表：只有归属自己的那些，**不分角色**。系统应用（归属为空，含三个种子客户端）
+	// 与别人登记的应用都不该出现——全量视图只在管理台的列表端点。
+	adminApp, _, err := s.CreateDeveloperApp(ctx, DeveloperAppInput{
+		Name:         devStrPtr("管理员自助登记的应用"),
+		RedirectURIs: devStrsPtr("https://admin.example/cb"),
+	}, &admin)
+	if err != nil {
+		t.Fatalf("管理员自助登记: %v", err)
+	}
+	createdClients = append(createdClients, adminApp.ID)
 	mine, err := s.ListDeveloperApps(ctx, &member)
 	if err != nil || len(mine) != 1 || mine[0].ID != app.ID {
 		t.Fatalf("成员应只看到自己的 1 个应用: %+v err=%v", mine, err)
 	}
-	all, err := s.ListDeveloperApps(ctx, &admin)
-	if err != nil {
-		t.Fatalf("管理员列表: %v", err)
+	adminApps, err := s.ListDeveloperApps(ctx, &admin)
+	if err != nil || len(adminApps) != 1 || adminApps[0].ID != adminApp.ID {
+		t.Fatalf("管理员在开发者中心也只应看到自己的 1 个应用: %+v err=%v", adminApps, err)
 	}
-	seen := false
-	for _, item := range all {
-		if item.ID == app.ID {
-			seen = true
+	for _, list := range [][]DeveloperApp{mine, adminApps} {
+		for _, item := range list {
+			if item.OwnerID == "" {
+				t.Fatalf("开发者面不得出现系统应用（归属为空）: %+v", item)
+			}
 		}
-	}
-	if !seen {
-		t.Fatalf("管理员应看到成员登记的应用: %+v", all)
 	}
 
 	// 自有平台清单：三个种子客户端都在，且都是"免同意 + 已核验 + 无归属"。
@@ -241,6 +286,17 @@ func TestDeveloperCenterAgainstPostgres(t *testing.T) {
 	}
 	if _, _, err = s.CreateDeveloperApp(ctx, DeveloperAppInput{Name: devStrPtr("超额应用"), RedirectURIs: devStrsPtr("https://over.example/cb")}, &other); err == nil || err.Error() != "app_quota_exceeded" {
 		t.Fatalf("配额用尽后必须拒绝，实际 err=%v", err)
+	}
+	// 管理员与普通账号同一口径：开发者面对所有角色只有一条规则（管理面的批量登记不受这个上限约束）。
+	for i := 0; i < MaxDeveloperAppsPerUser; i++ {
+		id := fmt.Sprintf("mfc-aquota-%02d", i)
+		if _, err := db.Exec("INSERT INTO auth.oauth_clients(id, secret_hash, name, redirect_uris, scopes, trusted, disabled, verified, owner_user_id) VALUES($1,'',$2,'{}','{openid}',false,false,false,$3)", id, "配额占位（管理员）", admin.ID); err != nil {
+			t.Fatalf("灌管理员配额行 %d: %v", i, err)
+		}
+		createdClients = append(createdClients, id)
+	}
+	if _, _, err = s.CreateDeveloperApp(ctx, DeveloperAppInput{Name: devStrPtr("管理员超额应用"), RedirectURIs: devStrsPtr("https://over-admin.example/cb")}, &admin); err == nil || err.Error() != "app_quota_exceeded" {
+		t.Fatalf("管理员的自助登记同样受配额约束，实际 err=%v", err)
 	}
 
 	// 删除：本人删掉自己的应用后读不到，库里也没有了。

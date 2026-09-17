@@ -128,8 +128,63 @@ func TestDeveloperCenterAgainstPostgres(t *testing.T) {
 			t.Fatalf("%s %s 越权应 404，实际 %d：%s", tc.method, tc.path, w.Code, w.Body.String())
 		}
 	}
-	if w := doJSON(t, r, http.MethodGet, "/api/developer/apps/"+clientID, adminBearer, ""); w.Code != http.StatusOK {
-		t.Fatalf("管理员（auth.oauth.manage）应能读任意应用，实际 %d", w.Code)
+	// 管理员在开发者面**不是例外**：读 / 改 / 轮换 / 删一律按"不存在"，且库里的行一字未动
+	// （含密钥哈希——轮换若能过，哈希必然变）。全量治理在管理面，见本节末尾的对照。
+	beforeProbe, err := st.GetOAuthClient(ctx, clientID)
+	if err != nil {
+		t.Fatalf("读探测前快照: %v", err)
+	}
+	for _, tc := range []struct{ method, path, body string }{
+		{http.MethodGet, "/api/developer/apps/" + clientID, ""},
+		{http.MethodPut, "/api/developer/apps/" + clientID, "{\"name\":\"管理员改名\"}"},
+		{http.MethodPost, "/api/developer/apps/" + clientID + "/rotate-secret", ""},
+		{http.MethodDelete, "/api/developer/apps/" + clientID, ""},
+	} {
+		if w := doJSON(t, r, tc.method, tc.path, adminBearer, tc.body); w.Code != http.StatusNotFound {
+			t.Fatalf("管理员 %s %s 也应 404，实际 %d：%s", tc.method, tc.path, w.Code, w.Body.String())
+		}
+	}
+	afterProbe, err := st.GetOAuthClient(ctx, clientID)
+	if err != nil {
+		t.Fatalf("读探测后快照: %v", err)
+	}
+	if afterProbe.Name != beforeProbe.Name || afterProbe.SecretHash != beforeProbe.SecretHash ||
+		afterProbe.Verified != beforeProbe.Verified || afterProbe.Disabled != beforeProbe.Disabled ||
+		afterProbe.OwnerID != beforeProbe.OwnerID {
+		t.Fatalf("管理员的越权请求不得改动任何字段: before=%+v after=%+v", beforeProbe, afterProbe)
+	}
+
+	// 开发者面的列表对管理员同样只回自己的应用：他没有登记过，所以是空的——
+	// 系统应用（归属为空，含三个种子客户端）与别人登记的应用都不出现。
+	w = doJSON(t, r, http.MethodGet, "/api/developer/apps", adminBearer, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("管理员读开发者面列表: %d %s", w.Code, w.Body.String())
+	}
+	var adminList struct {
+		Items []store.DeveloperApp `json:"items"`
+	}
+	decodeInto(t, w, &adminList)
+	if len(adminList.Items) != 0 {
+		t.Fatalf("管理员在开发者中心不该看到任何应用，实际 %+v", adminList.Items)
+	}
+
+	// 管理面（/api/admin/oauth/clients*）对同一个应用仍然能读能改：收口没误伤管理能力。
+	w = doJSON(t, r, http.MethodGet, "/api/admin/oauth/clients", adminBearer, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("管理面列表: %d %s", w.Code, w.Body.String())
+	}
+	var clients struct {
+		Items []store.OAuthClient `json:"items"`
+	}
+	decodeInto(t, w, &clients)
+	seenInAdminList := false
+	for _, item := range clients.Items {
+		if item.ID == clientID {
+			seenInAdminList = true
+		}
+	}
+	if !seenInAdminList {
+		t.Fatalf("管理面列表必须仍能看到这个应用: %+v", clients.Items)
 	}
 
 	// 管理员核验：管理台那条路径（PUT /api/admin/oauth/clients/{id}）置 verified 之后，

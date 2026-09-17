@@ -378,6 +378,9 @@ func (f *fakeOAuth) UpdateOAuthClient(ctx context.Context, id string, in store.O
 	if in.Disabled != nil {
 		c.Disabled = *in.Disabled
 	}
+	if in.Verified != nil {
+		c.Verified = *in.Verified
+	}
 	f.clients[c.ID] = c
 	f.audits = append(f.audits, store.OAuthAuditEntry{ActorID: actor.ID, ClientID: c.ID, Action: store.OAuthActionClientUpdate})
 	return c, nil

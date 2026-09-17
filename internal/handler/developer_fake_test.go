@@ -85,8 +85,8 @@ func (f *fakeOAuth) CreateDeveloperApp(ctx context.Context, in store.DeveloperAp
 	if actor == nil {
 		return store.DeveloperApp{}, "", fmt.Errorf("authentication_required")
 	}
-	// 配额：管理员不受限，与真实实现同一条判定。
-	if !store.Can(actor, "auth.oauth.manage") && f.ownedCount(actor.ID) >= store.MaxDeveloperAppsPerUser {
+	// 配额：所有角色同一口径（与真实实现 checkDeveloperAppQuota 同一条判定）。
+	if f.ownedCount(actor.ID) >= store.MaxDeveloperAppsPerUser {
 		return store.DeveloperApp{}, "", fmt.Errorf("app_quota_exceeded")
 	}
 	id := strings.TrimSpace(in.ID)
