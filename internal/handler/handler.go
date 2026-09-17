@@ -47,6 +47,8 @@ func (h *Handler) Register(r *gin.Engine) {
 	h.registerAuth(api, limiter)
 	h.registerOAuth(api, limiter)
 	h.registerDeveloper(api, limiter)
+	// 公开账号资料 GET /users/:id（匿名可读，email 仅本人可见）。
+	h.registerPublicUsers(api)
 
 	// OIDC 标准路径：
 	//   /.well-known/openid-configuration、/.well-known/jwks.json

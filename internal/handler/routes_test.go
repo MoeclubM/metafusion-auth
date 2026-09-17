@@ -41,6 +41,7 @@ var frozenRoutes = []string{
 	"GET /api/oauth/userinfo",
 	"GET /api/oidc/jwks",
 	"GET /api/setup",
+	"GET /api/users/:id",
 	"POST /api/admin/groups",
 	"POST /api/admin/invites",
 	"POST /api/admin/invites/:code/revoke",

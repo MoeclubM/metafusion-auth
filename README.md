@@ -25,6 +25,7 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 | GET | `/api/auth/me` | 令牌 | 当前账号 |
 | POST | `/api/auth/logout` | 令牌 | 注销当前会话并清 Cookie |
 | GET | `/api/auth/settings` | 匿名 | 实例准入能力：注册/邀请等设置的**持久化结果**（不是代码常量）；`require_email_verification` 恒为 false（邮件通道未接入） |
+| GET | `/api/users/:id` | 匿名 | 公开账号资料（前端用户主页）：`user` 给 `id`/`username`/`role`（被 ban 时带 `banned:true`），`stats.invited_count` 为该用户邀请成功的人数。`email` **只在请求者就是本人时**出现；非 uuid 或不存在的 id 一律 404 `not_found` |
 | GET/POST | `/api/auth/invite` | 令牌 | 个人邀请页：我的邀请码台账与由我邀请进来的人（`items`/`members`/`can_create`）/ 新建邀请码（`note`/`max_uses`/`expires_in_days`） |
 | PUT | `/api/auth/password`、POST `/api/auth/change-password` | 令牌 | 修改自己的密码（`old_password`/`new_password`） |
 | POST | `/api/auth/logout-all` | 令牌 | 吊销该用户全部会话 |
@@ -201,6 +202,14 @@ AUTH_TEST_DSN='postgres://user:pw@127.0.0.1:5432/metafusion_test?sslmode=disable
   `GET /api/auth/oauth-grants` 自查并撤回（见「吊销」），但同意页仍不做"已授权则跳过"。
 - **没有 introspection / RFC 7009 撤销端点**：下游本地验签的令牌无法即时撤销（见上）。
 - **jti 注销集合是单实例内存实现**：多副本部署需要共享状态（Redis 集合），当前未支持。
+- **公开资料只有账号列**：`auth.users` 里没有 `display_name` / `avatar_url` / `bio` / `created_at` /
+  `favorites_public` 这些展示列，`GET /api/users/:id` 因此**不返回**它们，也不填占位值——
+  空串或 false 会被读成"这个人就是没头像 / 就是没开收藏"，而事实是"没有这个来源"。
+  前端按缺字段降级；要补齐得先决定新增列与存量行的回填口径（`created_at` 尤其如此：账号行上
+  没有任何创建时间列）。收藏数在互动服务、作品数在目录服务，本服务不读它们的库，
+  所以 `stats` 只给 `invited_count`——给 0 会变成"这个人什么都没写"。
+- **`invite_code` 不是 `auth.users` 的列**：邀请码台账在 `auth.invites`（可限次/可过期/可吊销，一个人也可能有多张），
+  已由 `GET /api/auth/invite` **只对本人**提供，公开资料里不合成这个字段。
 
 ## 迁移状态
 
