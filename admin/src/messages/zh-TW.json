@@ -154,6 +154,7 @@
   "oauth.disabled": "已停用 {name}",
   "oauth.disableHint": "停用後該用戶端的權杖立即失效（可重新啟用）",
   "oauth.disableTitle": "停用用戶端",
+  "oauth.enable": "啟用",
   "oauth.enabled": "已啟用 {name}",
   "oauth.field.clientId": "client_id",
   "oauth.field.clientIdHint": "小寫字母開頭，可含小寫字母、數字、_ 與 -（3–64 位）",

@@ -154,6 +154,7 @@
   "oauth.disabled": "已停用 {name}",
   "oauth.disableHint": "停用后该客户端的令牌立即失效（可重新启用）",
   "oauth.disableTitle": "停用客户端",
+  "oauth.enable": "启用",
   "oauth.enabled": "已启用 {name}",
   "oauth.field.clientId": "client_id",
   "oauth.field.clientIdHint": "小写字母开头，可含小写字母、数字、_ 与 -（3–64 位）",

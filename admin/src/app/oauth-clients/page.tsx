@@ -337,12 +337,15 @@ function OAuthClientsPanel() {
                           </button>
                           <button
                             type="button"
-                            disabled={client.disabled}
-                            onClick={() => void handleEnable(client)}
+                            onClick={() => {
+                              // 停用要过二次确认（令牌立即失效），启用是恢复动作、直接放行。
+                              if (client.disabled) void handleEnable(client);
+                              else setConfirmTarget({ client, kind: "disable" });
+                            }}
                             title={client.disabled ? "" : t("oauth.disableHint")}
                             className="px-2 py-1 rounded-chip bg-surfaceSubtle hover:bg-surfaceHover text-text-body text-[11px] transition-colors duration-fast ease-soft disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                           >
-                            {t("oauth.disable")}
+                            {client.disabled ? t("oauth.enable") : t("oauth.disable")}
                           </button>
                           <button
                             type="button"

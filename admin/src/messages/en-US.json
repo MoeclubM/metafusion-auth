@@ -154,6 +154,7 @@
   "oauth.disabled": "Disabled {name}",
   "oauth.disableHint": "Disabling invalidates this client's tokens immediately (can be re-enabled)",
   "oauth.disableTitle": "Disable client",
+  "oauth.enable": "Enable",
   "oauth.enabled": "Enabled {name}",
   "oauth.field.clientId": "client_id",
   "oauth.field.clientIdHint": "Lowercase first, then lowercase letters, digits, _ or - (3–64 chars)",

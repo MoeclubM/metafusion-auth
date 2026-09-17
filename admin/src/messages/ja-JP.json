@@ -154,6 +154,7 @@
   "oauth.disabled": "{name} を無効化しました",
   "oauth.disableHint": "無効化するとこのクライアントのトークンは即時に無効になります（再有効化は可能）",
   "oauth.disableTitle": "クライアントの無効化",
+  "oauth.enable": "有効化",
   "oauth.enabled": "{name} を有効化しました",
   "oauth.field.clientId": "client_id",
   "oauth.field.clientIdHint": "小文字始まり、以降は小文字英数字・_・-（3〜64 文字）",
