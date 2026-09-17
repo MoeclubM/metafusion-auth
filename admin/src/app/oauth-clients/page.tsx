@@ -1,7 +1,7 @@
 "use client";
 
 // OAuth 客户端治理：列表（系统应用 / 第三方应用两组）、创建（一次性明文密钥）、轮换密钥、
-// 删除、停用/启用。
+// 删除、停用/启用、核验/取消核验。
 //
 // 边界：client_secret 只在创建与轮换的响应里出现一次（库里只有 bcrypt 哈希），
 // 所以界面拿到后必须立刻让用户保存；"再看一眼密钥"这种入口不存在，也不该伪造。
@@ -10,6 +10,10 @@
 // 种子名单只说明服务端会复活这几行、删不掉，与"谁是系统应用"无关。判定与依据写在
 // lib/endpoints.ts 的 isSystemClient 上，这里不再自己猜。
 // 系统应用只能在这里维护——开发者中心按 owner_user_id 过滤，看不见也管不着它们。
+//
+// 核验：管理员核实第三方应用的身份后置 verified（PUT /api/admin/oauth/clients/{id}），
+// 未核验的第三方应用在同意页会多显示一条提示，所以这一步走二次确认。系统应用免同意、
+// 展示上恒为已核验，不给它核验开关——不是"藏起当前状态"，而是这个动作对系统应用没有意义。
 
 import React, { useState } from "react";
 import { KeyRound, Plus } from "lucide-react";
@@ -46,7 +50,7 @@ import {
 // 模块级常量：useResource 的 initial 必须是稳定引用。
 const EMPTY_CLIENTS: OAuthClient[] = [];
 
-type ConfirmKind = "rotate" | "delete" | "disable";
+type ConfirmKind = "rotate" | "delete" | "disable" | "verify" | "unverify";
 
 function OAuthClientsPanel() {
   const { t } = useI18n();
@@ -112,6 +116,13 @@ function OAuthClientsPanel() {
       } else if (kind === "delete") {
         await deleteOAuthClient(client.client_id);
         setMessage({ kind: "ok", text: t("oauth.deleted", { name: client.client_id }) });
+      } else if (kind === "verify") {
+        // 管理面 PUT 是补丁语义：只提交 verified 这一个键，别的字段一律不碰。
+        await updateOAuthClient(client.client_id, { verified: true });
+        setMessage({ kind: "ok", text: t("oauth.verified", { name: client.client_id }) });
+      } else if (kind === "unverify") {
+        await updateOAuthClient(client.client_id, { verified: false });
+        setMessage({ kind: "ok", text: t("oauth.unverified", { name: client.client_id }) });
       } else {
         await updateOAuthClient(client.client_id, { disabled: true });
         setMessage({ kind: "ok", text: t("oauth.disabled", { name: client.client_id }) });
@@ -156,7 +167,27 @@ function OAuthClientsPanel() {
     const name = confirmTarget.client.client_id;
     if (confirmTarget.kind === "rotate") return t("oauth.rotateConfirm", { name });
     if (confirmTarget.kind === "delete") return t("oauth.deleteConfirm", { name });
-    return t("oauth.disableConfirm", { name });
+    if (confirmTarget.kind === "disable") return t("oauth.disableConfirm", { name });
+    if (confirmTarget.kind === "verify") return t("oauth.verifyConfirm", { name });
+    return t("oauth.unverifyConfirm", { name });
+  };
+
+  const confirmTitle = () => {
+    if (!confirmTarget) return "";
+    if (confirmTarget.kind === "rotate") return t("oauth.rotateTitle");
+    if (confirmTarget.kind === "delete") return t("oauth.deleteTitle");
+    if (confirmTarget.kind === "disable") return t("oauth.disableTitle");
+    if (confirmTarget.kind === "verify") return t("oauth.verifyTitle");
+    return t("oauth.unverifyTitle");
+  };
+
+  const confirmLabel = () => {
+    if (!confirmTarget) return "";
+    if (confirmTarget.kind === "rotate") return t("oauth.rotate");
+    if (confirmTarget.kind === "delete") return t("action.delete");
+    if (confirmTarget.kind === "disable") return t("oauth.disable");
+    if (confirmTarget.kind === "verify") return t("oauth.verify");
+    return t("oauth.unverify");
   };
 
   const actions: OAuthClientActions = {
@@ -172,6 +203,11 @@ function OAuthClientsPanel() {
       }
       setMessage(null);
       setConfirmTarget({ client, kind: "disable" });
+    },
+    onToggleVerified: (client) => {
+      // 核验/取消核验都改同意页对外的表达，所以两个方向都过二次确认。
+      setMessage(null);
+      setConfirmTarget({ client, kind: client.verified ? "unverify" : "verify" });
     },
     onDelete: (client) => {
       setMessage(null);
@@ -322,21 +358,11 @@ function OAuthClientsPanel() {
 
       <ConfirmDialog
         open={confirmTarget != null}
-        title={
-          confirmTarget?.kind === "rotate"
-            ? t("oauth.rotateTitle")
-            : confirmTarget?.kind === "delete"
-              ? t("oauth.deleteTitle")
-              : t("oauth.disableTitle")
-        }
+        title={confirmTitle()}
         message={confirmText()}
-        confirmLabel={
-          confirmTarget?.kind === "rotate"
-            ? t("oauth.rotate")
-            : confirmTarget?.kind === "delete"
-              ? t("action.delete")
-              : t("oauth.disable")
-        }
+        confirmLabel={confirmLabel()}
+        // 核验是"确认无误"的放行动作，不该用破坏性的红色按钮；取消核验与其余动作都是收回权限。
+        danger={confirmTarget?.kind !== "verify"}
         busy={busy}
         onClose={() => setConfirmTarget(null)}
         onConfirm={() => void runConfirm()}

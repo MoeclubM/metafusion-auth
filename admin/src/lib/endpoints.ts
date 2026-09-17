@@ -113,6 +113,8 @@ export interface OAuthClientDraft {
   scopes?: string[];
   trusted?: boolean;
   disabled?: boolean;
+  /** 核验状态：只有管理面（PUT /api/admin/oauth/clients/{id}）写得了；开发者路径传它会被拒。 */
+  verified?: boolean;
 }
 
 /** 实例设置是后端返回的键值补丁：键与类型都由接口决定，前端不维护字段清单。 */

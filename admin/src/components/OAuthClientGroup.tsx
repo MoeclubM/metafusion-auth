@@ -16,6 +16,8 @@ export interface OAuthClientActions {
   onRotate: (client: OAuthClient) => void;
   /** 启用中的客户端走二次确认停用；已停用的直接启用。 */
   onToggleDisabled: (client: OAuthClient) => void;
+  /** 核验开关：只对第三方应用出现（系统应用恒为已核验，见下方渲染条件）。 */
+  onToggleVerified: (client: OAuthClient) => void;
   onDelete: (client: OAuthClient) => void;
 }
 
@@ -34,7 +36,7 @@ export function OAuthClientGroup({
   actions: OAuthClientActions;
 }) {
   const { t, locale } = useI18n();
-  const { onRotate, onToggleDisabled, onDelete } = actions;
+  const { onRotate, onToggleDisabled, onToggleVerified, onDelete } = actions;
 
   return (
     <section className="space-y-2">
@@ -109,6 +111,21 @@ export function OAuthClientGroup({
                       </td>
                       <td className="py-2.5 px-3 text-right">
                         <div className="flex flex-wrap items-center justify-end gap-1.5">
+                          {/* 核验是管理员的第三方应用职责：系统应用免同意、恒为已核验，不给这个开关。 */}
+                          {system ? null : (
+                            <button
+                              type="button"
+                              onClick={() => onToggleVerified(client)}
+                              title={client.verified ? t("oauth.unverifyHint") : t("oauth.verifyHint")}
+                              className={
+                                client.verified
+                                  ? "px-2 py-1 rounded-chip bg-surfaceSubtle hover:bg-surfaceHover text-text-body text-[11px] transition-colors duration-fast ease-soft cursor-pointer"
+                                  : "px-2 py-1 rounded-chip bg-primary/15 hover:bg-primary/25 text-primary text-[11px] transition-colors duration-fast ease-soft cursor-pointer"
+                              }
+                            >
+                              {client.verified ? t("oauth.unverify") : t("oauth.verify")}
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => onRotate(client)}
