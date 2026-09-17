@@ -6,6 +6,8 @@
 // app/api/health 路由——健康端点必须始终由本进程直接回答。
 const nextConfig = {
   reactStrictMode: true,
+  // 默认会带 X-Powered-By: Next.js（线上实测本管理台响应里就有），关掉它不改变任何行为。
+  poweredByHeader: false,
   output: "standalone",
   basePath: "/admin/account",
   // 网关（主仓库 deploy/nginx.conf）给三条管理台路径各写了
