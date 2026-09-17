@@ -7,7 +7,7 @@ package handler
 // 差别只在授权判定：管理台按权限码，这里按 owner_user_id。
 //
 // 路径带 /developer 前缀而不是复用 /oauth：它对外提供的是"接入配置"（issuer、端点、
-// scope 说明、自有平台清单）加"我的应用"，与授权端点是两件事，拆开也让网关路由一目了然。
+// scope 说明）加"我的应用"，与授权端点是两件事，拆开也让网关路由一目了然。
 
 import (
 	"context"
@@ -27,7 +27,6 @@ type developerStore interface {
 	UpdateDeveloperApp(ctx context.Context, id string, in store.DeveloperAppInput, actor *store.User) (store.DeveloperApp, error)
 	RotateDeveloperAppSecret(ctx context.Context, id string, actor *store.User) (store.DeveloperApp, string, error)
 	DeleteDeveloperApp(ctx context.Context, id string, actor *store.User) error
-	ListPlatformApps(ctx context.Context) ([]store.DeveloperApp, error)
 }
 
 // 生产实现必须是 *store.Store：接口与实现一旦对不上，这里先编译失败。
@@ -47,14 +46,11 @@ func (h *Handler) registerDeveloper(api *gin.RouterGroup, limiter gin.HandlerFun
 	authed := requireUser(false)
 	group := api.Group("/developer")
 
-	// GET /developer/overview 是开发者中心的"接入配置"：端点、scope 说明与自有平台清单。
-	// 需要登录：平台清单里带 client_id 与回调地址，匿名可枚举（与 /oauth/clients 同一口径）。
+	// GET /developer/overview 是开发者中心的"接入配置"：issuer、端点地址、支持的
+	// grant / response / code_challenge 与 scope 的四语说明。**不含任何客户端清单**——
+	// 系统应用的 client_id、回调地址、scope 与归属不属于任何登录账号的可见面
+	// （曾经回过的 platforms 字段已整段删除，连查询一起；全量客户端只在管理面看）。
 	group.GET("/overview", authed, func(c *gin.Context) {
-		platforms, err := s.ListPlatformApps(c.Request.Context())
-		if err != nil {
-			respond(c, nil, err)
-			return
-		}
 		respond(c, gin.H{
 			"issuer":                 h.issuerBase(c),
 			"account_url":            h.developerAccountURL(),
@@ -63,7 +59,6 @@ func (h *Handler) registerDeveloper(api *gin.RouterGroup, limiter gin.HandlerFun
 			"response_types":         []string{"code"},
 			"code_challenge_methods": []string{"S256", "plain"},
 			"scopes":                 ScopeCatalog(),
-			"platforms":              platforms,
 		}, nil)
 	})
 

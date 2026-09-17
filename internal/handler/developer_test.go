@@ -175,9 +175,10 @@ func TestDeveloperAppRegistrationAndOwnership(t *testing.T) {
 	}
 }
 
-// TestDeveloperOverviewServesEndpointsAndPlatforms 覆盖开发者中心的"接入配置"：
-// 端点地址、scope 四语说明、以及"哪些站点是自有平台（免同意 + 自动核验）"。
-func TestDeveloperOverviewServesEndpointsAndPlatforms(t *testing.T) {
+// TestDeveloperOverviewServesEndpointsAndScopesOnly 覆盖开发者中心的"接入配置"：端点地址与
+// scope 四语说明，**且不含任何客户端清单**——系统应用与第三方应用的 client_id、显示名、
+// 回调地址都不该出现在这个响应里（曾经的 platforms 字段已整段删除，用例把这一点锁住）。
+func TestDeveloperOverviewServesEndpointsAndScopesOnly(t *testing.T) {
 	r, s, fake := newOAuthTestServer(t)
 	fake.addClient("metafusion-catalog", "MetaFusion 元数据知识库", []string{"https://findverse.cc/auth/callback"}, []string{"openid", "profile", "email"}, true, "")
 	fake.addClient("third-party", "第三方站点", []string{chainCallback}, []string{"openid"}, false, "s3cret-value")
@@ -189,13 +190,13 @@ func TestDeveloperOverviewServesEndpointsAndPlatforms(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("接入配置应 200，实际 %d：%s", w.Code, w.Body.String())
 	}
+	// 客户端清单连字段都不该再有：多回来一个键就是回归，所以这里只解接入配置那几项。
 	var overview struct {
-		Issuer     string               `json:"issuer"`
-		AccountURL string               `json:"account_url"`
-		Endpoints  map[string]string    `json:"endpoints"`
-		GrantTypes []string             `json:"grant_types"`
-		Scopes     []ScopeInfo          `json:"scopes"`
-		Platforms  []store.DeveloperApp `json:"platforms"`
+		Issuer     string            `json:"issuer"`
+		AccountURL string            `json:"account_url"`
+		Endpoints  map[string]string `json:"endpoints"`
+		GrantTypes []string          `json:"grant_types"`
+		Scopes     []ScopeInfo       `json:"scopes"`
 	}
 	decodeInto(t, w, &overview)
 
@@ -221,12 +222,12 @@ func TestDeveloperOverviewServesEndpointsAndPlatforms(t *testing.T) {
 			}
 		}
 	}
-	// 平台清单只含自有平台（免同意 + 已核验 + 无归属），第三方应用不得混进来。
-	if len(overview.Platforms) != 1 || overview.Platforms[0].ID != "metafusion-catalog" {
-		t.Fatalf("平台清单不符: %+v", overview.Platforms)
-	}
-	if !overview.Platforms[0].FirstParty || !overview.Platforms[0].Verified || overview.Platforms[0].OwnerID != "" {
-		t.Fatalf("自有平台应免同意、已核验、无归属: %+v", overview.Platforms[0])
+	// 逐字检查响应体：字段名与两个客户端的身份信息（client_id / 显示名 / 回调地址）都不得出现。
+	body := w.Body.String()
+	for _, needle := range []string{"platforms", "metafusion-catalog", "MetaFusion 元数据知识库", "https://findverse.cc/auth/callback", "third-party", "第三方站点", chainCallback, "s3cret-value"} {
+		if strings.Contains(body, needle) {
+			t.Fatalf("overview 不得回任何客户端信息，却出现了 %q：%s", needle, body)
+		}
 	}
 }
 

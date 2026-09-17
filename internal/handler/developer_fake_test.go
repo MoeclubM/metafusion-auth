@@ -49,23 +49,6 @@ func (f *fakeOAuth) ListDeveloperApps(ctx context.Context, actor *store.User) ([
 	return f.listApps(actor), nil
 }
 
-// ListPlatformApps 只回"免同意且没有归属"的客户端：与真实实现的 SQL 条件逐字对应。
-func (f *fakeOAuth) ListPlatformApps(ctx context.Context) ([]store.DeveloperApp, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	out := []store.DeveloperApp{}
-	for id, c := range f.clients {
-		if !c.Trusted || f.owners[id] != "" {
-			continue
-		}
-		c.ID = id
-		c.SecretHash = f.secrets[id]
-		out = append(out, store.DeveloperAppOf(c))
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out, nil
-}
-
 func (f *fakeOAuth) GetDeveloperApp(ctx context.Context, id string, actor *store.User) (*store.DeveloperApp, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

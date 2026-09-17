@@ -124,26 +124,6 @@ func (s *Store) ListDeveloperApps(ctx context.Context, actor *User) ([]Developer
 	return out, rows.Err()
 }
 
-// ListPlatformApps 列出平台自有应用（trusted 且没有 owner），只作为 overview 的接入配置字段回出去：
-// 接入方据此判断哪些站点与自己是同一套账号体系，而不是第三方。开发者中心的"我的应用"不经过它——
-// 那里只列归属当前账号的应用，系统应用在界面上也不再单列展示。
-func (s *Store) ListPlatformApps(ctx context.Context) ([]DeveloperApp, error) {
-	rows, err := s.DB.QueryContext(ctx, "SELECT "+clientColumns+" FROM auth.oauth_clients c LEFT JOIN auth.users u ON u.id=c.owner_user_id WHERE c.trusted=true AND c.owner_user_id IS NULL ORDER BY c.id")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []DeveloperApp{}
-	for rows.Next() {
-		c, err := scanClient(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, DeveloperAppOf(c))
-	}
-	return out, rows.Err()
-}
-
 // GetDeveloperApp 读单个应用；不是自己的按"不存在"返回（见 requireAppEditable）。
 func (s *Store) GetDeveloperApp(ctx context.Context, id string, actor *User) (*DeveloperApp, error) {
 	client, err := s.GetOAuthClient(ctx, id)

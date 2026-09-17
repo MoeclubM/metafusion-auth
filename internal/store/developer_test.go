@@ -233,29 +233,6 @@ func TestDeveloperCenterAgainstPostgres(t *testing.T) {
 		}
 	}
 
-	// 自有平台清单：三个种子客户端都在，且都是"免同意 + 已核验 + 无归属"。
-	platforms, err := s.ListPlatformApps(ctx)
-	if err != nil {
-		t.Fatalf("平台清单: %v", err)
-	}
-	found := map[string]bool{}
-	for _, item := range platforms {
-		if !item.FirstParty || !item.Verified || item.OwnerID != "" {
-			t.Fatalf("平台清单里混进了非自有平台: %+v", item)
-		}
-		found[item.ID] = true
-	}
-	for _, id := range seededClientIDs {
-		if !found[id] {
-			t.Fatalf("平台清单缺少种子客户端 %s: %+v", id, platforms)
-		}
-	}
-	for _, item := range platforms {
-		if item.ID == app.ID {
-			t.Fatalf("自助登记的应用不得出现在平台清单里: %+v", item)
-		}
-	}
-
 	// 轮换密钥：明文只返回一次，旧密钥立即失效。
 	before, err := s.GetOAuthClient(ctx, app.ID)
 	if err != nil {
