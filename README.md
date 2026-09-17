@@ -211,6 +211,20 @@ AUTH_TEST_DSN='postgres://user:pw@127.0.0.1:5432/metafusion_test?sslmode=disable
 - **`invite_code` 不是 `auth.users` 的列**：邀请码台账在 `auth.invites`（可限次/可过期/可吊销，一个人也可能有多张），
   已由 `GET /api/auth/invite` **只对本人**提供，公开资料里不合成这个字段。
 
+## 管理台（admin/）
+
+账号域的治理界面是本仓库内的**独立 Next.js 应用**（`admin/`），不属于主仓库前端
+（解耦审计 2026-09 §7.3 D1：每个服务自带 UI，独立应用 + 同域路径 + 网关按路径聚合）：
+
+- 挂载在 `/admin/account`（`basePath`），容器内监听 3000，网关上游名 `auth-admin:3000`；
+- 健康检查 `GET /admin/account/api/health` → `{"ok":true,"service":"auth-admin"}`，不依赖登录态；
+- 只调用本服务已有的 `/api/auth/*`、`/api/admin/*`；会话是同域 Cookie，
+  未登录或 401 跳主站 `/login?redirect=<当前路径>`，权限一律以 `/api/auth/me` 的 `permissions` 为准；
+- 页面：用户治理、权限组、邀请、OAuth 客户端、实例与设置（只读）。
+
+本地开发、镜像构建、环境变量与完整契约见 [admin/README.md](admin/README.md)；
+compose 与网关由主仓库负责，本仓库只保证端口、basePath 与健康检查与约定一致。
+
 ## 迁移状态
 
 - **已切流（2026-09-14，开发实例）**：网关把 `/api/setup`、`/api/auth/*`、`/api/admin/users*`、
