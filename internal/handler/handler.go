@@ -243,8 +243,7 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		respond(c, gin.H{"ok": true}, s.SetUserGroups(c.Request.Context(), c.Param("id"), in.Groups, currentUser(c)))
 	})
 
-	// PUT /auth/password 与 POST /auth/change-password 语义相同（当前用户改自己密码），
-	// 参数形状均为 old_password/new_password，复用同一个实现。
+	// 改自己的密码只有这一条入口（前端设置页也只调它），参数是 old_password/new_password。
 	changePassword := func(c *gin.Context) {
 		u := currentUser(c)
 		if u == nil {
@@ -261,7 +260,6 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		respond(c, gin.H{"ok": true}, s.ChangePassword(c.Request.Context(), u.ID, in.OldPassword, in.NewPassword))
 	}
 	api.PUT("/auth/password", requireUser(false), changePassword)
-	api.POST("/auth/change-password", requireUser(false), changePassword)
 
 	api.POST("/auth/logout-all", requireUser(false), func(c *gin.Context) {
 		u := currentUser(c)

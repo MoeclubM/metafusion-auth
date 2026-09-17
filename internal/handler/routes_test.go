@@ -49,7 +49,6 @@ var frozenRoutes = []string{
 	"POST /api/admin/oauth/clients/:id/revoke-tokens",
 	"POST /api/admin/users",
 	"POST /api/admin/users/:id/revoke-oauth-tokens",
-	"POST /api/auth/change-password",
 	"POST /api/auth/invite",
 	"POST /api/auth/login",
 	"POST /api/auth/logout",
