@@ -117,6 +117,20 @@ bunx next build      # 产物 .next/standalone
 
 这四条也是 CI（`.github/workflows/ci.yml` 的 `admin-ui` job）跑的东西。
 
+改了 `basePath` / `trailingSlash` / 健康端点之后，再打一遍路由矩阵——**必须无 3xx**，
+有 301/308 就说明应用的尾斜杠方向与网关不一致：
+
+```bash
+bunx next build && bunx next start -p 3000 &   # 或容器里的 bun .next/standalone/server.js
+for p in /admin/account /admin/account/ /admin/account/groups/ /admin/account/invites/ \
+         /admin/account/oauth-clients/ /admin/account/instance/ \
+         /admin/account/api/health /admin/account/api/health/ /admin/account/nope /; do
+  printf '%-36s %s\n' "$p" "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' http://127.0.0.1:3000$p)"
+done
+```
+
+期望：前 8 条 200（健康端点带不带尾斜杠都直接 200），`/admin/account/nope` 与 `/` 是 404。
+
 ## 未纳入本期
 
 - **实例设置的写入**：`PUT /api/admin/settings` 存在且受 `auth.settings.manage` 保护，
