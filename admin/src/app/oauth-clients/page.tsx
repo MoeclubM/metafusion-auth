@@ -1,22 +1,27 @@
 "use client";
 
-// OAuth 客户端治理：列表、创建（一次性明文密钥）、轮换密钥、删除、停用/启用。
+// OAuth 客户端治理：列表（系统应用 / 第三方应用两组）、创建（一次性明文密钥）、轮换密钥、
+// 删除、停用/启用。
 //
 // 边界：client_secret 只在创建与轮换的响应里出现一次（库里只有 bcrypt 哈希），
 // 所以界面拿到后必须立刻让用户保存；"再看一眼密钥"这种入口不存在，也不该伪造。
-// 第一方种子客户端由服务端保护（seeded_client_immutable），删除按钮提前置灰并说明。
+//
+// 分组依据是**归属**（owner_user_id 为空 = 平台登记的系统应用），不是"是否种子"：
+// 种子名单只说明服务端会复活这几行、删不掉，与"谁是系统应用"无关。判定与依据写在
+// lib/endpoints.ts 的 isSystemClient 上，这里不再自己猜。
+// 系统应用只能在这里维护——开发者中心按 owner_user_id 过滤，看不见也管不着它们。
 
 import React, { useState } from "react";
-import { KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { KeyRound, Plus } from "lucide-react";
 import { useI18n } from "@/i18n/I18nProvider";
 import { useResource } from "@/lib/useResource";
 import { AUTH_OAUTH_MANAGE } from "@/lib/permissions";
 import { describeCodedError, OAUTH_ERROR_KEYS } from "@/lib/errors";
-import { formatStamp } from "@/lib/format";
 import {
   createOAuthClient,
   deleteOAuthClient,
   fetchOAuthClients,
+  isSystemClient,
   OAUTH_CLIENT_ID_RE,
   OAUTH_SCOPES,
   rotateOAuthClientSecret,
@@ -25,10 +30,9 @@ import {
   type OAuthClientSecret,
 } from "@/lib/endpoints";
 import { RequirePermission } from "@/components/PermissionGate";
+import { OAuthClientGroup, type OAuthClientActions } from "@/components/OAuthClientGroup";
 import { CancelButton, ConfirmDialog, Modal } from "@/components/ui/Modal";
 import {
-  Chip,
-  EmptyBlock,
   ErrorNotice,
   inputClass,
   labelClass,
@@ -42,13 +46,10 @@ import {
 // 模块级常量：useResource 的 initial 必须是稳定引用。
 const EMPTY_CLIENTS: OAuthClient[] = [];
 
-/** 第一方种子客户端：这些 client_id 由账号服务在 Init 里写入，删不掉。 */
-const SEEDED_CLIENTS = new Set(["metafusion-catalog", "metafusion-forum", "metafusion-resources"]);
-
 type ConfirmKind = "rotate" | "delete" | "disable";
 
 function OAuthClientsPanel() {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const clients = useResource(fetchOAuthClients, EMPTY_CLIENTS, AUTH_OAUTH_MANAGE);
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -77,6 +78,7 @@ function OAuthClientsPanel() {
     setBusy(true);
     setMessage(null);
     try {
+      // 只提交形状列：归属由服务端保持为空（管理台创建的就是系统应用），界面也没有归属选项。
       const created = await createOAuthClient({
         client_id: clientId,
         name: form.name.trim() || clientId,
@@ -157,6 +159,30 @@ function OAuthClientsPanel() {
     return t("oauth.disableConfirm", { name });
   };
 
+  const actions: OAuthClientActions = {
+    onRotate: (client) => {
+      setCopied(false);
+      setConfirmTarget({ client, kind: "rotate" });
+    },
+    onToggleDisabled: (client) => {
+      // 停用会让令牌立即失效，所以过二次确认；启用是恢复动作，直接放行。
+      if (client.disabled) {
+        void handleEnable(client);
+        return;
+      }
+      setMessage(null);
+      setConfirmTarget({ client, kind: "disable" });
+    },
+    onDelete: (client) => {
+      setMessage(null);
+      setConfirmTarget({ client, kind: "delete" });
+    },
+  };
+
+  // 两组共用同一份动作：分组的差别只在"这是什么应用"，不在"能做什么"。
+  const systemClients = clients.data.filter(isSystemClient);
+  const thirdPartyClients = clients.data.filter((client) => !isSystemClient(client));
+
   return (
     <div className="space-y-4">
       <SectionHeader
@@ -186,6 +212,7 @@ function OAuthClientsPanel() {
       {createOpen ? (
         <form onSubmit={handleCreate} className="p-4 rounded-card bg-surfaceSubtle border border-line-subtle space-y-3 max-w-xl">
           <h3 className="font-semibold text-text-strong text-xs">{t("oauth.createTitle")}</h3>
+          <p className="text-[11px] text-text-muted leading-relaxed">{t("oauth.createSystemNote")}</p>
           <div>
             <label className={labelClass} htmlFor="oauth-client-id">{t("oauth.field.clientId")}</label>
             <input
@@ -272,104 +299,26 @@ function OAuthClientsPanel() {
         <ErrorNotice message={clients.error} onRetry={clients.reload} permissionHint={t("oauth.needPermission")} />
       ) : null}
 
-      {clients.loading && clients.data.length === 0 ? <LoadingBlock /> : null}
-      {!clients.loading && !clients.error && clients.data.length === 0 ? <EmptyBlock /> : null}
-
-      {clients.data.length > 0 ? (
-        <div className="rounded-card border border-line-subtle bg-surface/40 overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead>
-                <tr className="border-b border-line-subtle bg-surfaceSubtle text-text-muted font-mono">
-                  <th className="py-2.5 px-3 font-medium">{t("oauth.col.client")}</th>
-                  <th className="py-2.5 px-3 font-medium">{t("oauth.col.scopes")}</th>
-                  <th className="py-2.5 px-3 font-medium">{t("oauth.col.flags")}</th>
-                  <th className="py-2.5 px-3 font-medium text-right">{t("oauth.col.actions")}</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-line-subtle">
-                {clients.data.map((client) => {
-                  const seeded = SEEDED_CLIENTS.has(client.client_id);
-                  return (
-                    <tr key={client.client_id} className="hover:bg-surfaceSubtle transition-colors duration-fast ease-soft">
-                      <td className="py-2.5 px-3">
-                        <div className="font-mono text-[11px] text-text-strong">{client.client_id}</div>
-                        <div className="text-[10px] text-text-muted">{client.name}</div>
-                        <div className="text-[10px] text-text-faint font-mono break-all">
-                          {client.redirect_uris.join(", ") || t("oauth.noRedirectUris")}
-                        </div>
-                        <div className="text-[10px] text-text-faint font-mono">
-                          {t("oauth.createdAt", { stamp: formatStamp(client.created_at, locale) })}
-                        </div>
-                      </td>
-                      <td className="py-2.5 px-3">
-                        <div className="flex flex-wrap gap-1">
-                          {client.scopes.length === 0 ? (
-                            <span className="text-text-faint font-mono text-[10px]">—</span>
-                          ) : (
-                            client.scopes.map((scope) => <Chip key={scope}>{scope}</Chip>)
-                          )}
-                        </div>
-                      </td>
-                      <td className="py-2.5 px-3">
-                        <div className="flex flex-wrap gap-1">
-                          {client.trusted ? <Chip tone="warn">{t("oauth.flag.trusted")}</Chip> : null}
-                          {client.disabled ? (
-                            <Chip tone="danger">{t("oauth.flag.disabled")}</Chip>
-                          ) : (
-                            <Chip tone="ok">{t("oauth.flag.enabled")}</Chip>
-                          )}
-                          {seeded ? <Chip>{t("oauth.flag.firstParty")}</Chip> : null}
-                        </div>
-                      </td>
-                      <td className="py-2.5 px-3 text-right">
-                        <div className="flex flex-wrap items-center justify-end gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setCopied(false);
-                              setConfirmTarget({ client, kind: "rotate" });
-                            }}
-                            className="px-2 py-1 rounded-chip bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 text-[11px] transition-colors duration-fast ease-soft cursor-pointer inline-flex items-center gap-1"
-                          >
-                            <RefreshCw className="w-3 h-3" />
-                            <span>{t("oauth.rotate")}</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              // 停用要过二次确认（令牌立即失效），启用是恢复动作、直接放行。
-                              if (client.disabled) void handleEnable(client);
-                              else setConfirmTarget({ client, kind: "disable" });
-                            }}
-                            title={client.disabled ? "" : t("oauth.disableHint")}
-                            className="px-2 py-1 rounded-chip bg-surfaceSubtle hover:bg-surfaceHover text-text-body text-[11px] transition-colors duration-fast ease-soft disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                          >
-                            {client.disabled ? t("oauth.enable") : t("oauth.disable")}
-                          </button>
-                          <button
-                            type="button"
-                            disabled={seeded}
-                            title={seeded ? t("oauth.seededHint") : ""}
-                            onClick={() => {
-                              setMessage(null);
-                              setConfirmTarget({ client, kind: "delete" });
-                            }}
-                            className="px-2 py-1 rounded-chip bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 text-[11px] transition-colors duration-fast ease-soft disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer inline-flex items-center gap-1"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                            <span>{t("action.delete")}</span>
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+      {clients.loading && clients.data.length === 0 ? (
+        <LoadingBlock />
+      ) : (
+        <div className="space-y-5">
+          <OAuthClientGroup
+            title={t("oauth.group.system")}
+            desc={t("oauth.group.systemDesc")}
+            emptyText={t("oauth.group.systemEmpty")}
+            clients={systemClients}
+            actions={actions}
+          />
+          <OAuthClientGroup
+            title={t("oauth.group.thirdParty")}
+            desc={t("oauth.group.thirdPartyDesc")}
+            emptyText={t("oauth.group.thirdPartyEmpty")}
+            clients={thirdPartyClients}
+            actions={actions}
+          />
         </div>
-      ) : null}
+      )}
 
       <ConfirmDialog
         open={confirmTarget != null}

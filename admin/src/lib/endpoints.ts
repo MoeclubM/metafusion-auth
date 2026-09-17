@@ -63,12 +63,41 @@ export interface AdminInvite {
 export interface OAuthClient {
   client_id: string;
   name: string;
+  description?: string;
+  homepage_url?: string;
   redirect_uris: string[];
   scopes: string[];
   trusted: boolean;
   disabled: boolean;
+  /** 核验状态：同意页对未核验的第三方应用会多显示一条提示。 */
+  verified: boolean;
+  /** 归属账号 id：**空 = 平台登记的系统应用**（服务端 json tag 是 omitempty，NULL 时这个键不出现）。 */
+  owner_user_id?: string;
+  owner_username?: string;
   created_at: string;
 }
+
+/**
+ * isSystemClient 判定"这是平台自己登记的系统应用"（第一方）。
+ *
+ * 依据是**归属**，不是"是否种子"、也不是 trust：管理面列表 GET /api/admin/oauth/clients 回的
+ * 是 store.OAuthClient 投影（internal/store/oauth.go），它的字段里根本没有 first_party——那是
+ * 开发者中心 DeveloperApp 的字段；服务端另有 OAuthClient.FirstParty()，那个方法只是 trusted 的
+ * 别名。而 owner_user_id 为空恰好就是这个事实本身：Init 的三个种子客户端插入时不写
+ * owner_user_id（internal/store/store.go），开发者中心自助登记的应用必然带 owner_user_id
+ * （internal/store/developer.go 读、改、轮换、删四条路径都按它过滤）。因此
+ * "没有归属" = 系统应用（只能在这里维护），"有归属" = 第三方自助登记的应用。
+ */
+export function isSystemClient(client: OAuthClient): boolean {
+  return !client.owner_user_id;
+}
+
+/**
+ * 服务端 Init 每次启动都按 id 复活这三行（internal/store/oauth.go 的 seededClientIDs），
+ * 删除必然被拒（seeded_client_immutable）——界面提前置灰并说明，而不是让用户点了才报错。
+ * 它只说明"删不掉这几行"，**不**代表"谁是系统应用"（系统应用看归属，见 isSystemClient）。
+ */
+export const SEEDED_CLIENT_IDS = new Set(["metafusion-catalog", "metafusion-forum", "metafusion-resources"]);
 
 /** 创建 / 轮换的响应：client_secret 是**一次性明文**，离开这一次响应就无处可取。 */
 export interface OAuthClientSecret {
