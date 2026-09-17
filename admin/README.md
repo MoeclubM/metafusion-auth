@@ -14,7 +14,7 @@
 | 尾斜杠 | `trailingSlash: true` + `skipTrailingSlashRedirect: true` | 网关把 `/admin/account` 301 到带尾斜杠形式；应用必须同向认领这个规范形式，否则两边互打回（`ERR_TOO_MANY_REDIRECTS`）。关掉 Next 自己的归一化重定向，健康端点才能在契约里的字面路径上直接 200 |
 | 语言 | `NEXT_LOCALE` cookie | 键 `zh-CN` / `en-US` / `zh-TW` / `ja-JP`，与主站同名同值 |
 | 会话 | 同域 Cookie `mf_session` | 账号服务签发；页面用 `credentials: "include"` 取 `GET /api/auth/me` |
-| 未登录 | 跳 `/login?redirect=<当前路径>` | `/login` 是**主站**登录页，绝对路径、不带 basePath |
+| 未登录 | 跳 `/login?redirect=<当前路径>` | `/login` 是**主站**登录页，绝对路径、不带 basePath。只有 basePath 内的地址才当回跳目标，已在 `/login` 上或同一次加载已跳过就不再拼参数（防 redirect 套娃） |
 | 权限判定 | 服务端 `permissions` | 含 `*` 通配；前端只做「看不见」的界面收敛，不替代服务端鉴权 |
 
 改成上面任何一项都要同时改主仓库的 compose / 网关：
@@ -71,9 +71,8 @@ curl -s localhost:3000/admin/account/api/health   # {"ok":true,"service":"auth-a
 
 ## 部署
 
-由主仓库 `deploy/docker-compose.yml` 负责：加服务（构建上下文指向本仓库的 `admin/`）、
-接进网关上游 `auth-admin:3000`、按 `/admin/account/` 挂载。本仓库的
-`Dockerfile` / `.dockerignore` 只保证镜像本身可构建、可探活。
+由主仓库 `deploy/docker-compose.yml` 负责：加服务（`context` = 本仓库根、`dockerfile` = `admin/Dockerfile`）、
+接进网关上游 `auth-admin:3000`、按 `/admin/account/` 挂载。本仓库这边只保证镜像可构建、进程可探活。
 
 ## 页面
 
