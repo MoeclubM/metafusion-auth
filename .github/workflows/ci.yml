@@ -50,3 +50,25 @@ jobs:
         # -p 1：internal/store 与 internal/handler 都有真实库用例，且 store 的历史用例会
         # 清空 auth.users；包级并行时会互相踩（本地带 AUTH_TEST_DSN 跑同理）。
         run: go test -p 1 ./...
+
+  # 账号域自带的管理台（admin/）：独立应用，与 Go 后端同仓库但互不依赖，
+  # 校验口径与主仓库 frontend job 一致（Bun + i18n 断言 + tsc + next build）。
+  admin-ui:
+    name: admin ui (bun install / i18n / tsc / next build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: admin
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.0"   # 与 packageManager 字段一致
+      - name: bun install
+        run: bun install --frozen-lockfile
+      - name: i18n 一致性（四语键集合 + 源码引用）
+        run: bun run i18n:check
+      - name: tsc --noEmit
+        run: bunx tsc --noEmit
+      - name: next build
+        run: bunx next build
