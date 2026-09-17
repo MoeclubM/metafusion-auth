@@ -3,6 +3,9 @@
 // 账号服务 API 的唯一出口：同源 /api/*（网关按路径分流到 metafusion-auth），
 // 会话是账号服务签发的同域 Cookie mf_session（HttpOnly，前端读不到也不需要读）。
 // basePath /admin/account 只作用于本应用自己的路由，不参与这里——apiFetch 传的是绝对路径。
+// 唯一的例外是登录回跳的地址判定：只有本应用 basePath 内的路径才配当回跳目标（见 redirectToLogin）。
+
+import { BASE_PATH } from "./paths";
 
 /** 主站登录页：与本应用不同 basePath，永远用绝对路径，且不能带 basePath 前缀。 */
 export const LOGIN_PATH = "/login";
@@ -26,12 +29,32 @@ export function readLocaleCookie(): string | null {
 
 /** 当前页面地址（含 basePath），用于登录后跳回原处。 */
 export function currentPath(): string {
-  if (typeof window === "undefined") return "/admin/account";
+  if (typeof window === "undefined") return BASE_PATH + "/";
   return window.location.pathname + window.location.search;
 }
 
+/**
+ * 同一次页面加载只跳一次：账号服务不可达时可能有多块同时拿到 401，
+ * 逐块跳转会互相打断，也会把 redirect 参数越滚越长。
+ */
+let loginRedirectIssued = false;
+
+/**
+ * 跳主站登录页 /login?redirect=…（/login 在主站，绝对路径，不带 basePath）。
+ *
+ * 回跳地址只取**本应用 basePath 内**的路径：一旦当前地址已经不是自己的页面
+ * （例如回跳落在 /login 上又被渲染了一次），再拼一次 ?redirect= 就会把上一次的 redirect
+ * 当成路径再编码一遍，浏览器里表现为 redirect 套娃、URL 越滚越长。这种情况退化成不带参数的 /login。
+ */
 export function redirectToLogin(): void {
-  if (typeof window === "undefined") return;
+  if (typeof window === "undefined" || loginRedirectIssued) return;
+  loginRedirectIssued = true;
+  const pathname = window.location.pathname;
+  const insideApp = pathname === BASE_PATH || pathname.startsWith(BASE_PATH + "/");
+  if (!insideApp || pathname === LOGIN_PATH) {
+    window.location.href = LOGIN_PATH;
+    return;
+  }
   window.location.href = `${LOGIN_PATH}?redirect=${encodeURIComponent(currentPath())}`;
 }
 

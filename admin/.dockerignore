@@ -1,9 +1,0 @@
-node_modules
-.next
-.git
-.gitignore
-Dockerfile
-.dockerignore
-README.md
-*.log
-tsconfig.tsbuildinfo

@@ -11,6 +11,7 @@
 | 容器内端口 | `3000` | `EXPOSE 3000`、`PORT=3000`、`HOSTNAME=0.0.0.0` |
 | 网关上游名 | `auth-admin:3000` | 由主仓库 `deploy/docker-compose.yml` 加服务并接进网关 |
 | 健康检查 | `GET /admin/account/api/health` | 返回 `{"ok":true,"service":"auth-admin"}`，**不依赖登录态**（`src/app/api/health/route.ts`） |
+| 尾斜杠 | `trailingSlash: true` + `skipTrailingSlashRedirect: true` | 网关把 `/admin/account` 301 到带尾斜杠形式；应用必须同向认领这个规范形式，否则两边互打回（`ERR_TOO_MANY_REDIRECTS`）。关掉 Next 自己的归一化重定向，健康端点才能在契约里的字面路径上直接 200 |
 | 语言 | `NEXT_LOCALE` cookie | 键 `zh-CN` / `en-US` / `zh-TW` / `ja-JP`，与主站同名同值 |
 | 会话 | 同域 Cookie `mf_session` | 账号服务签发；页面用 `credentials: "include"` 取 `GET /api/auth/me` |
 | 未登录 | 跳 `/login?redirect=<当前路径>` | `/login` 是**主站**登录页，绝对路径、不带 basePath |
@@ -44,12 +45,18 @@ bun run dev          # http://127.0.0.1:3000/admin/account
 
 ## 构建镜像
 
+构建上下文是**仓库根**（主编排传 `context=${MF_AUTH_DIR:-../../metafusion-auth}`、
+`dockerfile=admin/Dockerfile`），所以要在仓库根执行：
+
 ```bash
-cd admin
-docker build -t metafusion-auth-admin:dev .
+cd metafusion-auth
+docker build -f admin/Dockerfile -t metafusion-auth-admin:dev .
 docker run --rm -p 3000:3000 metafusion-auth-admin:dev
 curl -s localhost:3000/admin/account/api/health   # {"ok":true,"service":"auth-admin"}
 ```
+
+同理，忽略规则放在**仓库根**的 `.dockerignore`（同一个上下文还给账号服务的 Go 镜像用），
+放在 `admin/` 下面不会生效。
 
 构建期不需要任何环境变量。运行期只有 Next standalone 自带的那几个：
 

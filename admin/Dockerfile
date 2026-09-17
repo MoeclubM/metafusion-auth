@@ -1,26 +1,28 @@
 # syntax=docker/dockerfile:1
 # ==============================================================================
-# MetaFusion Auth Admin — Next.js standalone on Bun 1.4
+# MetaFusion 账号管理台（auth-admin）
 #
-# 端口与 basePath 是跨仓库契约：容器内监听 3000，主仓库 compose 里网关的上游名是
-# auth-admin:3000，页面挂载在 /admin/account（见 next.config.mjs）。改这三样前先改主仓库。
+# 冻结契约（主仓库 deploy/docker-compose.yml 的 auth-admin 服务与 deploy/nginx.conf）：
+#   build.context = 账号仓库根（${MF_AUTH_DIR:-../../metafusion-auth}），
+#   build.dockerfile = admin/Dockerfile —— 因此下面所有 COPY 路径都相对**仓库根**，不是 admin/；
+#   容器内端口 3000；网关把 /admin/account/ 反代到这里；健康端点 /admin/account/api/health。
 #
-# 多阶段 standalone 模式照抄 MetaFusion/frontend/Dockerfile（样板），只去掉主仓库前端特有的
-# NEXT_PUBLIC_* 构建参数：本应用全部资源与接口都走同源路径，构建期不需要外部地址。
+# 多阶段 standalone 模式照抄主仓库 frontend/Dockerfile（样板），构建器用 Bun：
+# Next 的 standalone 产物自带最小 server.js，运行时不需要 node_modules。
 # ==============================================================================
 FROM oven/bun:1.4-alpine AS base
 
 FROM base AS deps
 WORKDIR /app
-# Bun 兼容 npm 锁文件，优先使用 bun.lock
-COPY package.json bun.lock* package-lock.json* ./
+# 锁文件用 bun.lock（bun 1.2+ 的文本格式；1.2 之前是二进制 bun.lockb，同一条 glob 都覆盖）。
+COPY admin/package.json admin/bun.lock* admin/package-lock.json* ./
 RUN --mount=type=cache,target=/root/.bun \
     bun install --frozen-lockfile 2>/dev/null || bun install
 
 FROM base AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
-COPY . .
+COPY admin/ ./
 ENV NEXT_TELEMETRY_DISABLED 1
 # Bun 1.4 原生跑 Next 构建（比 Node 快 3-5 倍）
 RUN --mount=type=cache,target=/app/.next/cache \
