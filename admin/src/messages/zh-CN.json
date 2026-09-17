@@ -213,7 +213,7 @@
   "oauth.err.invalidRedirectUri": "回调地址非法：{detail}",
   "oauth.err.invalidRedirectUris": "回调地址列表非法",
   "oauth.err.invalidScope": "不支持的 scope：{detail}",
-  "oauth.err.seededClientImmutable": "第一方种子客户端不可删除",
+  "oauth.err.seededClientImmutable": "服务端种子客户端不可删除（每次启动按 id 复活）",
   "permission.adminCodes": "auth.users.manage / auth.groups.manage / auth.invites.manage / auth.oauth.manage / auth.settings.manage",
   "permission.anyAdminCode": "任一账号域管理权限码",
   "permission.deniedDesc": "本块需要权限码 {code}；你的账号没有这个权限码。",

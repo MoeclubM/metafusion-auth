@@ -213,7 +213,7 @@
   "oauth.err.invalidRedirectUri": "Invalid redirect URI: {detail}",
   "oauth.err.invalidRedirectUris": "Invalid redirect URI list",
   "oauth.err.invalidScope": "Unsupported scope: {detail}",
-  "oauth.err.seededClientImmutable": "Seeded first-party clients cannot be deleted",
+  "oauth.err.seededClientImmutable": "Seeded clients cannot be deleted (the server re-creates them by id on startup)",
   "permission.adminCodes": "auth.users.manage / auth.groups.manage / auth.invites.manage / auth.oauth.manage / auth.settings.manage",
   "permission.anyAdminCode": "any account-domain management code",
   "permission.deniedDesc": "This block requires permission code {code}, which your account does not hold.",

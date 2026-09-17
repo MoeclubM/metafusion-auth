@@ -213,7 +213,7 @@
   "oauth.err.invalidRedirectUri": "リダイレクト URI が不正です：{detail}",
   "oauth.err.invalidRedirectUris": "リダイレクト URI の一覧が不正です",
   "oauth.err.invalidScope": "未対応の scope：{detail}",
-  "oauth.err.seededClientImmutable": "第一方のシードクライアントは削除できません",
+  "oauth.err.seededClientImmutable": "サーバーのシードクライアントは削除できません（起動のたびに id で復元されます）",
   "permission.adminCodes": "auth.users.manage / auth.groups.manage / auth.invites.manage / auth.oauth.manage / auth.settings.manage",
   "permission.anyAdminCode": "いずれかのアカウント領域の管理権限コード",
   "permission.deniedDesc": "このブロックには権限コード {code} が必要ですが、あなたのアカウントは保持していません。",

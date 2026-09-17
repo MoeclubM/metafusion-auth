@@ -213,7 +213,7 @@
   "oauth.err.invalidRedirectUri": "回呼位址非法：{detail}",
   "oauth.err.invalidRedirectUris": "回呼位址清單非法",
   "oauth.err.invalidScope": "不支援的 scope：{detail}",
-  "oauth.err.seededClientImmutable": "第一方種子用戶端不可刪除",
+  "oauth.err.seededClientImmutable": "服務端種子用戶端不可刪除（每次啟動依 id 復活）",
   "permission.adminCodes": "auth.users.manage / auth.groups.manage / auth.invites.manage / auth.oauth.manage / auth.settings.manage",
   "permission.anyAdminCode": "任一帳號域管理權限碼",
   "permission.deniedDesc": "本區塊需要權限碼 {code}；你的帳號沒有這個權限碼。",
