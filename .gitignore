@@ -5,5 +5,4 @@ bin/
 # 管理台（admin/，Next.js 独立应用）
 admin/node_modules/
 admin/.next/
-admin/.dockerignore.bak
 admin/tsconfig.tsbuildinfo
