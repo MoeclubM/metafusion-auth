@@ -43,6 +43,7 @@ func PermissionCatalog() []PermissionCode {
 		{Code: "auth.invites.manage", Service: "auth", Names: map[string]string{"zh-CN": "管理邀请码", "zh-TW": "管理邀請碼", "ja-JP": "招待コード管理", "en-US": "Manage invite codes"}},
 		{Code: "auth.settings.manage", Service: "auth", Names: map[string]string{"zh-CN": "管理实例设置", "zh-TW": "管理實例設定", "ja-JP": "インスタンス設定", "en-US": "Manage instance settings"}},
 		{Code: "auth.oauth.manage", Service: "auth", Names: map[string]string{"zh-CN": "管理 OAuth 客户端", "zh-TW": "管理 OAuth 用戶端", "ja-JP": "OAuth クライアントの管理", "en-US": "Manage OAuth clients"}},
+		{Code: "auth.audit.read", Service: "auth", Names: map[string]string{"zh-CN": "查看审计日志", "zh-TW": "檢視審計日誌", "ja-JP": "監査ログの閲覧", "en-US": "View audit log"}},
 		{Code: "catalog.entity.edit", Service: "catalog", Names: map[string]string{"zh-CN": "编辑目录实体", "zh-TW": "編輯目錄實體", "ja-JP": "カタログ実体の編集", "en-US": "Edit catalog entities"}},
 		{Code: "catalog.relation.edit", Service: "catalog", Names: map[string]string{"zh-CN": "编辑实体关系", "zh-TW": "編輯實體關係", "ja-JP": "関係の編集", "en-US": "Edit entity relations"}},
 		{Code: "catalog.definitions.manage", Service: "catalog", Names: map[string]string{"zh-CN": "管理动态定义", "zh-TW": "管理動態定義", "ja-JP": "動的定義の管理", "en-US": "Manage dynamic definitions"}},
