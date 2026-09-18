@@ -121,7 +121,8 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 
 	// GET /auth/settings 供未登录页面读取实例准入能力：值为**实例设置的持久化结果**
 	// （registration_enabled / invite_required 等），不是代码里的常量。
-	// require_email_verification 目前恒为 false：邮件通道未接入，前端据此隐藏验证流程。
+	// require_email_verification 恒为 false：邮件通道未接入，没有任何强制点；store 侧一律按
+	// 生效值回答 false 并拒绝写入 true（unsupported_setting），前端据此不显示验证流程。
 	api.GET("/auth/settings", func(c *gin.Context) {
 		v, err := s.PublicSettings(c.Request.Context())
 		respond(c, v, err)

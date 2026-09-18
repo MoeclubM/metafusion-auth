@@ -235,6 +235,10 @@ func settingsWith(ctx context.Context, q queryer) (map[string]any, error) {
 		}
 		out[k] = v
 	}
+	// 邮件通道未接入，"注册需要邮箱验证"这一项没有任何强制点：读面一律按**生效值** false 回答。
+	// 存量可能存在的 true 行既不生效，也不再出现在任何读取面上（管理台据此不会显示一个
+	// 看起来打开、实际不影响登录的开关）；写入面同样拒绝 true（见 UpdateSettings）。
+	out[SettingRequireEmailVerify] = false
 	return out, rows.Err()
 }
 
@@ -265,12 +269,25 @@ func (s *Store) UpdateSettings(ctx context.Context, patch map[string]any, actor 
 	norm := map[string]any{}
 	for k, v := range patch {
 		switch k {
-		case SettingRegistrationEnabled, SettingInviteRequired, SettingRequireEmailVerify, SettingAuthRateLimitEnabled:
+		case SettingRegistrationEnabled, SettingInviteRequired, SettingAuthRateLimitEnabled:
 			b, ok := v.(bool)
 			if !ok {
 				return fmt.Errorf("invalid_setting: %s", k)
 			}
 			norm[k] = b
+		// 邮件通道未接入 → 该开关**没有强制点**，打开它等于对外承诺一个不存在的流程
+		// （登录页会显示"需要邮箱验证"而注册没有任何验证环节）。因此只接受 false：
+		// true 明确拒绝（unsupported_setting，与 invalid_setting 区分开，便于调用方认出
+		// "这个键存在但当前不支持打开"），false 照旧落库以便幂等回写。
+		case SettingRequireEmailVerify:
+			b, ok := v.(bool)
+			if !ok {
+				return fmt.Errorf("invalid_setting: %s", k)
+			}
+			if b {
+				return fmt.Errorf("unsupported_setting: %s", k)
+			}
+			norm[k] = false
 		case SettingRateLimitPerMinute:
 			n, ok := toInt(v)
 			if !ok || n < 1 || n > 100000 {
