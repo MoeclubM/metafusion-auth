@@ -41,9 +41,14 @@ type Handler struct {
 	// rateLimitPolicy 覆盖"是否限流、每分钟几次"的来源：生产为 nil（走 store 的实例设置），
 	// 用例据此在不建库的前提下断言开关与速率。
 	rateLimitPolicy func(context.Context) (bool, int)
+	// loginGuardFactory 生产登录失败保护计数器：生产为 newLoginGuard（每个 Register 一份，
+	// 状态随引擎存活），用例据此换成假时钟实例来断言窗口与递增延迟。
+	loginGuardFactory func() *loginGuard
 }
 
-func New(s *store.Store) *Handler { return &Handler{store: s, oauth: s, developer: s, tokens: s} }
+func New(s *store.Store) *Handler {
+	return &Handler{store: s, oauth: s, developer: s, tokens: s, loginGuardFactory: newLoginGuard}
+}
 
 // Register 挂载全部路由。限流沿用主仓库的口径：只对认证写入类接口按 IP 固定窗口限流，
 // 但速率与开关按请求读实例设置（auth_rate_limit_enabled / auth_rate_limit_per_minute），
@@ -85,7 +90,9 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		u, err := s.CreateUser(c.Request.Context(), in.Username, in.Email, in.Password, true, nil)
 		respond(c, u, err)
 	})
-	api.POST("/auth/login", limiter, func(c *gin.Context) {
+	// 登录失败保护：先过按 IP 的请求速率层（limiter），再过按账号+IP 的失败凭据层
+	// （loginGuardMiddleware，见 login_guard.go 的层次说明与阈值）。
+	api.POST("/auth/login", limiter, h.loginGuardMiddleware(), func(c *gin.Context) {
 		var in struct {
 			Username string `json:"username"`
 			Email    string `json:"email"`
