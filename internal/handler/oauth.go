@@ -8,6 +8,7 @@ package handler
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -119,7 +120,7 @@ func (h *Handler) registerOAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		}
 		code, _, err := s.CreateOAuthCode(c.Request.Context(), clientID, u.ID, redirectURI, store.FormatScopes(granted), c.Query("code_challenge"), c.Query("code_challenge_method"))
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			oauthErrorResponse(c, err)
 			return
 		}
 		c.Redirect(http.StatusFound, oauthRedirect(redirectURI, [][2]string{{"code", code}, {"state", state}}))
@@ -156,7 +157,7 @@ func (h *Handler) registerOAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		}
 		grant, err := s.ExchangeOAuthCode(c.Request.Context(), clientID, clientSecret, code, redirectURI, verifier)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			oauthErrorResponse(c, err)
 			return
 		}
 		resp := gin.H{
@@ -272,6 +273,18 @@ func oauthRedirect(redirectURI string, params [][2]string) string {
 		sep = "&"
 	}
 	return b.String()
+}
+
+// oauthErrorResponse 与 respond 共用同一套判定：只有机器码形状的业务错误才回给客户端，
+// 库层/网络/反序列化原文（含表名与约束名）记服务端日志后回通用码。OAuth 端点的响应形状
+// 仍是 {"error": 码}：第三方按 RFC 6749 读的是码，不是驱动的报错句。
+func oauthErrorResponse(c *gin.Context, err error) {
+	if internalFailure(err) {
+		slog.Error("账号服务：OAuth 端点未登记的错误（原文不外发）", "err", err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"error": codeInternalError})
+		return
+	}
+	c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 }
 
 func (h *Handler) jwks(c *gin.Context) {

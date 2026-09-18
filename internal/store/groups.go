@@ -134,8 +134,16 @@ func (s *Store) CreateGroup(ctx context.Context, in Group, actor *User) (Group, 
 	names, _ := jsonMarshal(g.Names)
 	descs, _ := jsonMarshal(g.Descriptions)
 	err := s.write(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, "INSERT INTO auth.groups(id,code,names,descriptions,permissions,is_system,sort_order) VALUES($1,$2,$3,$4,$5,false,$6)", g.ID, g.Code, names, descs, pq.Array(g.Permissions), g.SortOrder)
-		return err
+		// 组码唯一约束 groups_code_key 是并发建组的裁判：撞码回稳定码 group_exists（409），
+		// 不把 pq 原文交给管理台（同一类竞态的说明见 Register 的注释）。
+		res, err := tx.ExecContext(ctx, "INSERT INTO auth.groups(id,code,names,descriptions,permissions,is_system,sort_order) VALUES($1,$2,$3,$4,$5,false,$6) ON CONFLICT (code) DO NOTHING", g.ID, g.Code, names, descs, pq.Array(g.Permissions), g.SortOrder)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("group_exists")
+		}
+		return nil
 	})
 	return g, err
 }
@@ -444,8 +452,15 @@ func (s *Store) Register(ctx context.Context, username, email, password, inviteC
 		if n > 0 {
 			return fmt.Errorf("username_or_email_taken")
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO auth.users(id,username,email,password_hash,role) VALUES($1,$2,$3,$4,$5)", u.ID, u.Username, u.Email, string(hash), u.Role); err != nil {
+		// 预检只是"友好路径"：两个并发注册可能同时通过它，唯一索引 users_username_key 才是
+		// 最终裁判。ON CONFLICT + RowsAffected 让竞态落败方拿到与预检相同的稳定码，而不是把
+		// "pq: duplicate key ... users_username_key" 交给注册页（2026-09-19 第二轮架构报告 #9/#15）。
+		res, err := tx.ExecContext(ctx, "INSERT INTO auth.users(id,username,email,password_hash,role) VALUES($1,$2,$3,$4,$5) ON CONFLICT (username) DO NOTHING", u.ID, u.Username, u.Email, string(hash), u.Role)
+		if err != nil {
 			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("username_or_email_taken")
 		}
 		if needInvite {
 			if err := consumeInvite(ctx, tx, inviteCode, u.ID); err != nil {

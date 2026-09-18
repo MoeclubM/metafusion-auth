@@ -61,6 +61,7 @@
   "groups.system": "システム",
   "groups.systemLocked": "組み込みグループは削除できません",
   "groups.title": "権限グループ",
+  "groups.err.exists": "同じコードの権限グループが既に存在します。別のコードを指定してください",
   "groups.err.forbidden": "権限がありません：この操作には auth.groups.manage が必要です",
   "groups.err.invalidCode": "グループコードの形式が不正です：小文字始まり、以降は小文字英数字・_・-（2〜64 文字）",
   "groups.err.invalidPayload": "リクエスト内容が不正です",

@@ -61,6 +61,7 @@
   "groups.system": "System",
   "groups.systemLocked": "Built-in groups cannot be deleted",
   "groups.title": "Permission groups",
+  "groups.err.exists": "A permission group with this code already exists; pick another code",
   "groups.err.forbidden": "Not permitted: this action requires auth.groups.manage",
   "groups.err.invalidCode": "Invalid group code: lowercase first, then lowercase letters, digits, _ or - (2–64 chars)",
   "groups.err.invalidPayload": "Invalid request payload",

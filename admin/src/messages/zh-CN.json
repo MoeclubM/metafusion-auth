@@ -61,6 +61,7 @@
   "groups.system": "系统组",
   "groups.systemLocked": "系统内置组不可删除",
   "groups.title": "权限组",
+  "groups.err.exists": "同名权限组已存在：换一个组码再试",
   "groups.err.forbidden": "权限不足：本操作需要 auth.groups.manage",
   "groups.err.invalidCode": "组码格式非法：小写字母开头，只能含小写字母、数字、_ 与 -（2–64 位）",
   "groups.err.invalidPayload": "请求载荷非法",

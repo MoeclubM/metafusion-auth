@@ -72,6 +72,8 @@ export const GROUP_ERROR_KEYS: Record<string, string> = {
   invalid_group_code: "groups.err.invalidCode",
   invalid_permission_code: "groups.err.invalidPermission",
   group_not_found: "groups.err.notFound",
+  // 并发建组撞码：后端 ON CONFLICT + groups_code_key 回稳定码 409 group_exists。
+  group_exists: "groups.err.exists",
   cannot_strip_admin_wildcard: "groups.err.stripWildcard",
   invalid_payload: "groups.err.invalidPayload",
   forbidden: "groups.err.forbidden",

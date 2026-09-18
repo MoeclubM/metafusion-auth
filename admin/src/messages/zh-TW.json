@@ -61,6 +61,7 @@
   "groups.system": "系統組",
   "groups.systemLocked": "系統內建組不可刪除",
   "groups.title": "權限組",
+  "groups.err.exists": "同名權限組已存在：請換一個組碼再試",
   "groups.err.forbidden": "權限不足：本操作需要 auth.groups.manage",
   "groups.err.invalidCode": "組碼格式非法：小寫字母開頭，只能含小寫字母、數字、_ 與 -（2–64 位）",
   "groups.err.invalidPayload": "請求載荷非法",
