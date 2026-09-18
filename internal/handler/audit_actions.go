@@ -66,6 +66,9 @@ func auditExempt() map[string]string {
 		"POST /api/auth/refresh":           "会话续期：只延长现有会话、不改变任何状态；登录已有 session.login 留痕，续期会把审计冲成噪声",
 		"POST /api/auth/tokens/introspect": "下游鉴权用的内省：读语义、无状态变更（last_used_at 是访问痕迹，不是管理动作）",
 		"POST /api/oauth/token":            "OAuth 子域已有事务内的 auth.oauth_audit（授权码兑换与同意都在那里），本轮不双写",
+		// 下面这条不是写方法（进不了覆盖守卫的枚举）：登记它是为了让"同意页也会落库"这件事
+		// 在豁免表里留下一句理由，而不是靠读者自己发现。
+		"GET /api/oauth/authorize": "同意/拒绝会写授权码，是 GET 上的写副作用；已由事务内的 auth.oauth_audit 留痕，本轮不双写",
 	}
 }
 
