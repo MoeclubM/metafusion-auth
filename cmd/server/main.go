@@ -14,6 +14,7 @@ import (
 
 	"github.com/MoeclubM/metafusion-auth/internal/config"
 	"github.com/MoeclubM/metafusion-auth/internal/handler"
+	"github.com/MoeclubM/metafusion-auth/internal/nettrust"
 	"github.com/MoeclubM/metafusion-auth/internal/store"
 )
 
@@ -49,7 +50,14 @@ func main() {
 
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
-	r.SetTrustedProxies(nil)
+	// 网关用 CF-Connecting-IP 还原真实客户端后转发，XFF 形状常是「客户端, 客户端」。
+	// 配置非法必须拒绝启动：静默退化成"无可信代理"会让 ClientIP() 恒等于网关容器 IP，
+	// 登录守卫与 PAT 限流的桶键（IP）随即退化成全站共享一个桶——而那种退化在功能上表现正常，没人会发现。
+	trusted, perr := nettrust.Apply(r, cfg.TrustedProxies)
+	if perr != nil {
+		log.Fatalf("trusted proxies configuration invalid: %v", perr)
+	}
+	log.Printf("trusted proxies for X-Forwarded-For: %s", trusted)
 	r.Use(func(c *gin.Context) {
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
