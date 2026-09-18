@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/MoeclubM/metafusion-auth/internal/audit"
 )
 
 // User 是账号的对外投影；password_hash 永不出现在 JSON 里。
@@ -186,6 +188,11 @@ func (s *Store) Close() error { return s.DB.Close() }
 
 func (s *Store) Init(ctx context.Context) error {
 	if _, err := s.DB.ExecContext(ctx, schema); err != nil {
+		return err
+	}
+	// 审计表不在 auth schema 里：它是四个服务共用的平台表（读取面见
+	// docs/architecture/audit-log.md §5），建表语句的唯一来源在 internal/audit。
+	if _, err := s.DB.ExecContext(ctx, audit.Schema); err != nil {
 		return err
 	}
 	if _, err := s.DB.ExecContext(ctx, seedClients); err != nil {
