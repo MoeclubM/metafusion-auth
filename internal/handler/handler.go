@@ -112,8 +112,8 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		respond(c, gin.H{"token": next, "access_token": next, "token_type": "Bearer", "expires_in": int(store.AccessTokenTTL.Seconds()), "user": u}, err)
 	})
 
-	api.GET("/auth/me", requireUser(false), func(c *gin.Context) { respond(c, currentUser(c), nil) })
-	api.POST("/auth/logout", requireUser(false), func(c *gin.Context) {
+	api.GET("/auth/me", requireUser(), func(c *gin.Context) { respond(c, currentUser(c), nil) })
+	api.POST("/auth/logout", requireUser(), func(c *gin.Context) {
 		token := tokenFromRequest(c)
 		clearSessionCookie(c)
 		respond(c, gin.H{"ok": true}, s.Logout(c.Request.Context(), token))
@@ -148,7 +148,7 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 	})
 
 	// 个人邀请页：我的邀请码台账 + 由我邀请进来的人。
-	api.GET("/auth/invite", requireUser(false), func(c *gin.Context) {
+	api.GET("/auth/invite", requireUser(), func(c *gin.Context) {
 		u := currentUser(c)
 		invites, err := s.ListInvites(c.Request.Context(), u)
 		if err != nil {
@@ -162,7 +162,7 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 			"can_create": store.Can(u, "auth.invites.manage"),
 		}, err)
 	})
-	api.POST("/auth/invite", requireUser(false), func(c *gin.Context) {
+	api.POST("/auth/invite", requireUser(), func(c *gin.Context) {
 		var in struct {
 			Note          string `json:"note"`
 			MaxUses       int    `json:"max_uses"`
@@ -270,9 +270,9 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		}
 		respond(c, gin.H{"ok": true}, s.ChangePassword(c.Request.Context(), u.ID, in.OldPassword, in.NewPassword))
 	}
-	api.PUT("/auth/password", requireUser(false), changePassword)
+	api.PUT("/auth/password", requireUser(), changePassword)
 
-	api.POST("/auth/logout-all", requireUser(false), func(c *gin.Context) {
+	api.POST("/auth/logout-all", requireUser(), func(c *gin.Context) {
 		u := currentUser(c)
 		if u == nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
@@ -285,7 +285,7 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 	// 用户自助管理自己的第三方授权（设置页的"已授权应用"）。
 	// 与管理员的 /admin/users/{id}/revoke-oauth-tokens 的区别是**归属**：
 	// 这里只认当前登录身份，路径里没有别人的 user id，因此普通成员也能收回自己的授权。
-	api.GET("/auth/oauth-grants", requireUser(false), func(c *gin.Context) {
+	api.GET("/auth/oauth-grants", requireUser(), func(c *gin.Context) {
 		u := currentUser(c)
 		if u == nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication_required"})
@@ -294,7 +294,7 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		items, err := s.ListOAuthGrants(c.Request.Context(), u.ID)
 		respond(c, gin.H{"items": items}, err)
 	})
-	api.DELETE("/auth/oauth-grants/:client_id", requireUser(false), func(c *gin.Context) {
+	api.DELETE("/auth/oauth-grants/:client_id", requireUser(), func(c *gin.Context) {
 		u := currentUser(c)
 		if u == nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication_required"})
@@ -394,15 +394,16 @@ func currentUser(c *gin.Context) *store.User {
 	return nil
 }
 
-func requireUser(admin bool) gin.HandlerFunc {
+// requireUser 是"登录即可"的闸门。此前它带一个 admin bool 与一条
+// `store.Can(u, store.WildcardPermission)` 分支，但 10 处调用**全部传 false**——
+// 分支永不成立，读代码的人却会以为还有一条"按 role 判管理员"的路径。
+// 管理员权限一律走 requirePermission(code)（细粒度码，见下），故这里删掉参数与分支
+// （2026-09-19 第二轮审计 #8）。
+func requireUser() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		u := currentUser(c)
 		if u == nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication_required"})
-			return
-		}
-		if admin && !store.Can(u, store.WildcardPermission) {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden"})
 			return
 		}
 		c.Next()
@@ -426,10 +427,6 @@ func requirePermission(code string) gin.HandlerFunc {
 		c.Next()
 	}
 }
-
-// isAdmin 判定"全权管理员"：* 通配码，或老令牌（无 permissions 声明）的历史 role=admin。
-// 与 requirePermission 同源（store.Can），不再按 auth.* 前缀放宽。
-func isAdmin(u *store.User) bool { return store.Can(u, store.WildcardPermission) }
 
 func tokenFromRequest(c *gin.Context) string {
 	token := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")

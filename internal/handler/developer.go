@@ -43,7 +43,7 @@ func (h *Handler) developers() developerStore {
 
 func (h *Handler) registerDeveloper(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 	s := h.developers()
-	authed := requireUser(false)
+	authed := requireUser()
 	group := api.Group("/developer")
 
 	// GET /developer/overview 是开发者中心的"接入配置"：issuer、端点地址、支持的

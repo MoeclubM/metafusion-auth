@@ -60,7 +60,7 @@ const (
 
 func (h *Handler) registerTokens(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 	s := h.personalTokens()
-	authed := requireUser(false)
+	authed := requireUser()
 	byIP := newPATBuckets(patIntrospectPerIPPerMinute)
 	byToken := newPATBuckets(patIntrospectPerTokenPerMinute)
 

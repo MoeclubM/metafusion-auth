@@ -85,13 +85,10 @@ func (s *Store) GroupsForUser(ctx context.Context, userID string) ([]Group, erro
 	return scanGroups(rows)
 }
 
-func groupsForWith(ctx context.Context, q queryer, userID string) ([]Group, error) {
-	rows, err := q.QueryContext(ctx, "SELECT "+groupColumns+" FROM auth.groups g JOIN auth.user_groups ug ON ug.group_id=g.id WHERE ug.user_id=$1 ORDER BY g.sort_order, g.code", userID)
-	if err != nil {
-		return nil, err
-	}
-	return scanGroups(rows)
-}
+// 这里曾有 groupsForWith(ctx, queryer, userID) 的变体（"为了在事务内复用"接受 queryer），
+// 但没有任何调用方：真正跑的是上面的 GroupsForUser（queryer 这一路的现成写法见 access.go 的
+// settingsWith，那边确实被用）。零引用的第二份读口径会让人误判权限组查询有两套实现，已删
+// （2026-09-19 第二轮审计 #7）。
 
 // WithAccess 补齐用户的组与权限集合：/auth/me、令牌签发、下游服务都据此判定。
 func (s *Store) WithAccess(ctx context.Context, u *User) error {
