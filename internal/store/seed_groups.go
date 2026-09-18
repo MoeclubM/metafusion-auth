@@ -49,13 +49,13 @@ func systemGroups() []seedGroup {
 			code:  "community_admin",
 			names: map[string]string{"zh-CN": "论坛管理员", "zh-TW": "論壇管理員", "ja-JP": "フォーラム管理者", "en-US": "Community administrator"},
 			desc:  map[string]string{"zh-CN": "管理板块、置顶与帖子治理", "zh-TW": "管理版塊、置頂與貼文治理", "ja-JP": "板の管理、ピン留めと投稿の管理", "en-US": "Manage boards, pins and posts"},
-			perms: []string{"community.post.create", "community.post.moderate", "community.topic.pin", "community.board.manage"}, order: 30,
+			perms: []string{"community.post.create", "community.post.moderate", "community.topic.pin", "community.board.manage", "community.report.review"}, order: 30,
 		},
 		{
 			code:  "community_moderator",
 			names: map[string]string{"zh-CN": "论坛版主", "zh-TW": "論壇版主", "ja-JP": "フォーラムモデレーター", "en-US": "Community moderator"},
 			desc:  map[string]string{"zh-CN": "治理帖子与置顶，不改板块结构", "zh-TW": "治理貼文與置頂，不變更版塊結構", "ja-JP": "投稿とピン留めの管理のみ。板の構成は変更しない", "en-US": "Moderate posts and pins without changing board structure"},
-			perms: []string{"community.post.create", "community.post.moderate", "community.topic.pin"}, order: 40,
+			perms: []string{"community.post.create", "community.post.moderate", "community.topic.pin", "community.report.review"}, order: 40,
 		},
 		{
 			code:  "member",

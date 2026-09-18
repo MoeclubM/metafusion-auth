@@ -54,6 +54,7 @@ func PermissionCatalog() []PermissionCode {
 		{Code: "community.post.moderate", Service: "community", Names: map[string]string{"zh-CN": "管理帖子", "zh-TW": "管理貼文", "ja-JP": "投稿の管理", "en-US": "Moderate posts"}},
 		{Code: "community.topic.pin", Service: "community", Names: map[string]string{"zh-CN": "置顶主题", "zh-TW": "置頂主題", "ja-JP": "トピック固定", "en-US": "Pin topics"}},
 		{Code: "community.board.manage", Service: "community", Names: map[string]string{"zh-CN": "管理板块", "zh-TW": "管理版塊", "ja-JP": "板の管理", "en-US": "Manage boards"}},
+		{Code: "community.report.review", Service: "community", Names: map[string]string{"zh-CN": "处理举报与申诉", "zh-TW": "處理檢舉與申訴", "ja-JP": "通報と異議申立ての処理", "en-US": "Review reports and appeals"}},
 		{Code: "storage.asset.upload", Service: "storage", Names: map[string]string{"zh-CN": "上传资源", "zh-TW": "上傳資源", "ja-JP": "アップロード", "en-US": "Upload assets"}},
 		{Code: "storage.asset.moderate", Service: "storage", Names: map[string]string{"zh-CN": "审核资源", "zh-TW": "審核資源", "ja-JP": "アセット審査", "en-US": "Moderate assets"}},
 	}
