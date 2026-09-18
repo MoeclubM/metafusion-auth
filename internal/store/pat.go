@@ -53,9 +53,14 @@ const (
 	patLastUsedTTL = time.Minute
 )
 
-// ErrInvalidPAT 是内省失败的唯一错误：令牌不存在 / 已吊销 / 已过期 / 账号被封禁 /
-// 有效权限为空，一律返回它。区分原因等于告诉探测者"这个令牌曾经有效"，也会被拿来
-// 枚举账号状态，因此 HTTP 层统一 401 + 单一机器码（invalid_token）。
+// ErrInvalidPAT 是内省失败的唯一错误：令牌不存在 / 已吊销 / 已过期 / 账号被封禁，一律返回它。
+// 区分原因等于告诉探测者"这个令牌曾经有效"，也会被拿来枚举账号状态，因此 HTTP 层统一
+// 401 + 单一机器码（invalid_token）。
+//
+// **有效权限为空不属于它**：创建时 scopes 至少一项（空 scopes 在创建端就被拒），但账号事后
+// 丢了那些码会让交集变空——那时令牌仍然有效，内省回 200 + permissions: []，只是什么都做不了。
+// 这一格的安全性由调用方保证：用 HasPermission(principal.Permissions, code) 判定，
+// 而不是会按 role 兜底到 admin/editor 的 Can（见 PATPrincipal.Permissions）。
 var ErrInvalidPAT = errors.New("invalid_token")
 
 // PersonalAccessToken 是一张 PAT 的对外投影：**没有 token_hash 字段**，明文也无处可放，
@@ -307,6 +312,8 @@ func (s *Store) RevokePersonalAccessToken(ctx context.Context, userID, id string
 //
 // 判定顺序：哈希直查（token_hash 唯一索引）→ 行未吊销 → 未过期（expires_at 为空即永不过期）
 // → 账号未封禁 → **有效权限 = 账号现时权限 ∩ scopes**（每次回表重算，不读缓存）。
+// 交集为空是**合法结果**（200 + permissions: []），不是无效令牌：令牌确实属于一个可用账号，
+// 只是此刻没有任何权限码；判定这一格只能用 HasPermission 语义（见 PATPrincipal.Permissions）。
 // 本服务不缓存内省结果：结果缓存放在下游（60 秒），这样"吊销多久生效"只有一个来源，
 // 而不是两级 TTL 叠加出说不清的窗口。
 func (s *Store) IntrospectPersonalAccessToken(ctx context.Context, token string) (*PATPrincipal, error) {
