@@ -181,18 +181,13 @@ func (h *Handler) registerOAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		}
 		// 以 auth.oauth_tokens 的**存活行**为准（吊销 / 客户端停用即时生效），
 		// 没有该行时回退服务端会话，保持"登录令牌也能调 userinfo"的既有行为。
-		u, _, err := s.OAuthUserinfo(c.Request.Context(), token)
+		// scope 必须一并取回：返回字段由它决定（原先用 _ 丢弃，等于无视同意范围）。
+		u, scope, err := s.OAuthUserinfo(c.Request.Context(), token)
 		if err != nil || u == nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid_token"})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{
-			"sub":      u.ID,
-			"id":       u.ID,
-			"username": u.Username,
-			"role":     u.Role,
-			"email":    u.Email,
-		})
+		c.JSON(http.StatusOK, userinfoFields(u, scope))
 	})
 
 	// 管理台：客户端管理与令牌吊销（受 auth.oauth.manage 保护）。
@@ -201,6 +196,32 @@ func (h *Handler) registerOAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 	// OIDC 发现与 JWKS：外部服务用公钥在本地验签访问令牌/id_token，无需回调本服务。
 	api.GET("/.well-known/openid-configuration", h.discovery)
 	api.GET("/oidc/jwks", h.jwks)
+}
+
+// userinfoFields 按令牌 scope 组装 userinfo 响应：只回**被授予 scope 覆盖**的字段，
+// 否则"同意页说只给 A、实际给了 A+B"，用户给出的同意就是失效的（2026-09-19 审计 S-10）。
+//
+//   - sub / id 恒回：第三方需要一个稳定的用户标识，也是 OIDC 的 subject；
+//   - profile → username / role（账号的公开资料）；
+//   - email   → email。
+//
+// scope 为空串是**会话令牌**的兼容分支（见 store.OAuthUserinfo 的注释）：那是用户自己的令牌、
+// 不经过第三方同意流程，保持全字段以便排障；第三方令牌一定带着它被授予的 scope。
+func userinfoFields(u *store.User, scope string) map[string]any {
+	granted := map[string]bool{}
+	for _, code := range strings.Fields(scope) {
+		granted[code] = true
+	}
+	session := len(granted) == 0
+	out := map[string]any{"sub": u.ID, "id": u.ID}
+	if session || granted["profile"] {
+		out["username"] = u.Username
+		out["role"] = u.Role
+	}
+	if session || granted["email"] {
+		out["email"] = u.Email
+	}
+	return out
 }
 
 // accountPageBase 是未登录时跳转的账号页；配置为空则用站点相对路径。

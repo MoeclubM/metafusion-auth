@@ -43,7 +43,7 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 | GET | `/api/admin/permissions` | `auth.groups.manage` | 权限码清单（`items`），供管理台按域展示可授予的码 |
 | GET | `/api/oauth/authorize` | 登录 | 授权码流程：校验 client 与 redirect_uri 白名单、校验并收敛 scope；已登录但未表态时渲染同意页，`consent=allow` 才发码，`consent=deny` 带 `error=access_denied` 回跳；`trusted` 客户端跳过同意页。PKCE 支持 `S256`/`plain` |
 | POST | `/api/oauth/token` | 匿名 | 授权码换令牌（表单或 JSON），响应含收敛后的 `scope`、真实 `expires_in` 与 `id_token`（aud 指向客户端） |
-| GET | `/api/oauth/userinfo` | 令牌 | OIDC 用户信息（以 `auth.oauth_tokens` 的存活行为准，令牌被吊销/客户端停用后立即 401） |
+| GET | `/api/oauth/userinfo` | 令牌 | OIDC 用户信息，**按令牌 scope 裁剪**：`sub`/`id` 恒回，`profile` → `username`/`role`，`email` → `email`；以 `auth.oauth_tokens` 的存活行为准，令牌被吊销/客户端停用后立即 401。实例自身的会话令牌（scope 为空串，排障用）保持全字段 |
 | GET/POST | `/api/admin/oauth/clients` | `auth.oauth.manage` | 管理面客户端列表（`items`）/ 创建（返回一次性明文密钥，库里只存 bcrypt 哈希） |
 | PUT/DELETE | `/api/admin/oauth/clients/{id}` | `auth.oauth.manage` | 更新（改名 / 回调白名单 / scope 白名单 / trusted / 停用）/ 删除（第一方种子客户端不可删） |
 | POST | `/api/admin/oauth/clients/{id}/rotate-secret` | `auth.oauth.manage` | 轮换密钥：明文只返回一次，老密钥立即失效 |
@@ -200,8 +200,6 @@ AUTH_TEST_DSN='postgres://user:pw@127.0.0.1:5432/metafusion_test?sslmode=disable
 
 - **不签发 `refresh_token`**（理由见上）：第三方访问令牌 15 分钟到期后需要重新授权；
   是否给第三方单独放宽 TTL 属产品决策，当前未放宽。
-- **`userinfo` 不按 scope 裁剪声明**：仍返回既有字段集合（`sub`/`id`/`username`/`role`/`email`），
-  保持向后兼容；"只授 `openid` 时不返回 email"这类最小化未实现。
 - **同意不记忆**：每次授权都会重新询问（`trusted` 客户端除外）。用户已可通过
   `GET /api/auth/oauth-grants` 自查并撤回（见「吊销」），但同意页仍不做"已授权则跳过"。
 - **没有 introspection / RFC 7009 撤销端点**：下游本地验签的令牌无法即时撤销（见上）。
