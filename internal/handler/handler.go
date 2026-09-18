@@ -10,19 +10,15 @@ package handler
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"net/http"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/lib/pq"
 
 	"github.com/MoeclubM/metafusion-auth/internal/store"
 )
@@ -453,138 +449,58 @@ func isSecure(c *gin.Context) bool {
 	return c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https"
 }
 
+// maxJSONBody 是 JSON 写接口的请求体上限。必须自己封顶：网关的 client_max_body_size 是 1G，
+// 应用层不设限就等于把"一个请求能让服务占多少内存"交给调用方决定。
+const maxJSONBody = 2 << 20
+
+// body 是 JSON 写接口统一的请求解析：2MB 上限 + **拒绝未知字段**。
+//
+// 未知字段一律拒绝而不是静默忽略：字段名拼错的请求不会再"看起来成功了"。此前
+// POST /api/setup 会把 site_name / registration_enabled / invite_required 静默吞掉
+// （请求体只声明 username/email/password），调用方以为这些开关已经生效。口径与目录、
+// 互动、存储三个服务的写接口一致；收 map[string]any 的端点（PUT /api/admin/settings）
+// 天然不受影响——未知的**设置键**由 store.UpdateSettings 的接受表拒绝。
 func body(c *gin.Context, v any) bool {
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2<<20)
-	if err := c.ShouldBindJSON(v); err != nil {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxJSONBody)
+	dec := json.NewDecoder(c.Request.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_payload"})
 		return false
 	}
 	return true
 }
 
-const codeInternalError = "internal_error"
-
 // respond 把 store 的稳定错误码映射为 HTTP 状态码；响应体统一为单一 error 字段。
-//
-// 只有"机器码形状"的错误文本才作为码交给客户端：库层/驱动/网络/反序列化的原文
-// （可能带表名、约束名、SQL 片段、内网地址或文件路径）一律只进服务端日志，对外回通用码。
-// 触发面是注册的"先查后插"竞态——并发同名会撞 users_username_key，撞名是用户可自纠的
-// 错误，必须有稳定码与恰当状态码（2026-09-19 第二轮架构报告 #9/#15/#16）。
 func respond(c *gin.Context, v any, err error) {
 	if err == nil {
 		c.JSON(http.StatusOK, v)
 		return
 	}
-	var pg *pq.Error
+	status, code := http.StatusBadRequest, err.Error()
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		c.JSON(http.StatusNotFound, gin.H{"error": "not_found"})
-	case errors.As(err, &pg):
-		status, code := postgresErrorResponse(pg)
-		if status >= http.StatusInternalServerError {
-			// SQLSTATE、约束名与 detail 只进服务端日志：客户端拿到表名/约束名既看不懂，也泄露库结构。
-			slog.Error("账号服务：数据库错误", "sqlstate", string(pg.Code), "constraint", pg.Constraint,
-				"detail", pg.Detail, "err", err.Error())
-		}
-		c.JSON(status, gin.H{"error": code})
-	case internalFailure(err):
-		slog.Error("账号服务：未登记的错误（原文不外发）", "err", err.Error())
-		c.JSON(http.StatusInternalServerError, gin.H{"error": codeInternalError})
-	default:
-		c.JSON(authStatusFor(err.Error()), gin.H{"error": err.Error()})
-	}
-}
-
-// postgresErrorResponse 把 SQLSTATE 翻成 (状态码, 稳定码)，与目录服务同口径
-// （backend/internal/catalog/http.go 的 respond）：唯一约束 409、外键/CHECK 与非法字面量 400、
-// 其余 500 database_error。约束名只用来挑码与记日志，绝不回给客户端。
-func postgresErrorResponse(pg *pq.Error) (int, string) {
-	switch pg.Code {
-	case "23505": // unique_violation
-		switch pg.Constraint {
-		case "users_username_key":
-			return http.StatusConflict, "username_or_email_taken"
-		case "groups_code_key":
-			return http.StatusConflict, "group_exists"
-		default:
-			return http.StatusConflict, "conflict"
-		}
-	case "23503", "23514": // foreign_key_violation / check_violation：引用了不存在或越界的行
-		return http.StatusBadRequest, "constraint_violation"
-	case "22P02": // invalid_text_representation：uuid 之类的字面量不合法
-		return http.StatusBadRequest, "invalid_id"
-	default:
-		return http.StatusInternalServerError, "database_error"
-	}
-}
-
-// authStatusFor 按错误码给状态码：未登记的码保持 400（接线前的行为不变），只有需要客户端
-// 分流处理的语义才升级——403 决定"联系站务"还是"重新登录"，409 让"撞名"这类可自纠的冲突
-// 能被识别，404 让"不存在/不属于你"不泄露存在性。判定按错误文本的首段，因此
-// "group_not_found: member" 这类带细节的码同样命中。
-func authStatusFor(message string) int {
-	switch firstCode(message) {
-	case "forbidden", "account_banned":
+		status, code = http.StatusNotFound, "not_found"
+	case code == "forbidden":
+		status = http.StatusForbidden
+	case code == "invalid_credentials":
+		status = http.StatusUnauthorized
+	case code == "version_conflict":
+		status = http.StatusConflict
+	case code == "invalid_token":
+		status = http.StatusUnauthorized
+	case code == "account_banned":
 		// 口令/令牌本身没问题，是账号被停用：401 会让客户端引导"重新登录"然后又被拒一次，
 		// 403 才能让前端提示"账号已停用，请联系站务"。
-		return http.StatusForbidden
-	case "invalid_credentials", "invalid_token":
-		return http.StatusUnauthorized
-	case "version_conflict", "username_or_email_taken", "group_exists":
-		return http.StatusConflict
-	// client_not_found / token_not_found：不是自己的应用或令牌按"不存在"处理，
-	// 不把"这东西存在但不属于你"透给调用方。
-	case "client_not_found", "token_not_found":
-		return http.StatusNotFound
+		status = http.StatusForbidden
+	case code == "client_not_found":
+		status = http.StatusNotFound
+	case code == "token_not_found":
+		// 不是本人的令牌按"不存在"处理：不把"这张令牌属于别人"透给调用方。
+		status = http.StatusNotFound
 	}
-	return http.StatusBadRequest
+	c.JSON(status, gin.H{"error": code})
 }
-
-// firstCode 取错误文本的首段：store 用"码"或"码: 细节"表达业务错误。
-func firstCode(message string) string {
-	if i := strings.Index(message, ":"); i >= 0 {
-		return strings.TrimSpace(message[:i])
-	}
-	return strings.TrimSpace(message)
-}
-
-// internalFailure 判定"这不是业务错误码，而是后端故障原文"：标准库/驱动的哨兵值，
-// 或首段不是机器码形状。驱动与网络原文一定不满足形状（含空格、大写、斜杠、引号），
-// 例如 "dial tcp 10.0.0.5:5432: connect: connection refused"、
-// "invalid character 'x' looking for beginning of value"、"open /etc/passwd: permission denied"。
-func internalFailure(err error) bool {
-	var pg *pq.Error
-	if errors.As(err, &pg) {
-		return true
-	}
-	for _, sentinel := range []error{
-		context.Canceled, context.DeadlineExceeded,
-		sql.ErrConnDone, sql.ErrTxDone, driver.ErrBadConn,
-		io.EOF, io.ErrUnexpectedEOF,
-	} {
-		if errors.Is(err, sentinel) {
-			return true
-		}
-	}
-	if infraErrorPrefixes[firstCode(err.Error())] {
-		return true
-	}
-	return !machineCode(firstCode(err.Error()))
-}
-
-// infraErrorPrefixes 是标准库/驱动自己的错误前缀：它们的形状与机器码一样
-// （"sql: connection is already closed"、"driver: bad connection"、"pq: ..."），
-// 必须显式挡掉，否则会被当成业务码原样回给客户端。
-var infraErrorPrefixes = map[string]bool{
-	"sql": true, "driver": true, "pq": true, "pgx": true,
-	"context": true, "net": true, "tls": true, "x509": true,
-	"io": true, "os": true, "fs": true, "http": true,
-}
-
-// machineCodePattern 是稳定机器码的形状：小写字母开头，只含 [a-z0-9_.-]（字段路径可能带点）。
-var machineCodePattern = regexp.MustCompile(`^[a-z][a-z0-9_.-]*$`)
-
-func machineCode(s string) bool { return machineCodePattern.MatchString(s) }
 
 // rateLimiter 是按 IP 的固定窗口计数（与主仓库 setup/login 的限流口径一致），
 // 速率与开关按请求从实例设置读取：

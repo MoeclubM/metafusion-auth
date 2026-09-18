@@ -126,8 +126,11 @@ const (
 	SettingAuthRateLimitEnabled = "auth_rate_limit_enabled"
 	SettingRateLimitPerMinute   = "auth_rate_limit_per_minute"
 	SettingRegistrationGroups   = "registration_default_groups"
-	SettingSiteName             = "site_name"
 )
+
+// 退役键 site_name：站点名由前端构建期文案决定，账号服务里的这个设置没有任何消费方
+// （详情见 README「实例设置」）。已从 DefaultSettings 与 UpdateSettings 的接受表移除，
+// 写它会拿到 invalid_setting: site_name；存量行不再出现在任何读取面上（见 settingsWith）。
 
 // DefaultRateLimitPerMinute 是限流默认速率，单位"次/分钟"。
 //
@@ -145,7 +148,6 @@ func DefaultSettings() map[string]any {
 		SettingAuthRateLimitEnabled: true,
 		SettingRateLimitPerMinute:   DefaultRateLimitPerMinute,
 		SettingRegistrationGroups:   []string{"member"},
-		SettingSiteName:             "MetaFusion",
 	}
 }
 
@@ -225,6 +227,12 @@ func settingsWith(ctx context.Context, q queryer) (map[string]any, error) {
 		if err := json.Unmarshal(raw, &v); err != nil {
 			continue
 		}
+		// 只回传**当前接受表**里的键（DefaultSettings 的键集）：退役键的存量行留在库里，
+		// 但不进任何读取面——回传一个谁也改不了、也没有消费方的键，只会让管理台看起来
+		// 还有这个设置项。新增设置项必须同时加进 DefaultSettings，否则读写都不认它。
+		if _, known := out[k]; !known {
+			continue
+		}
 		out[k] = v
 	}
 	return out, rows.Err()
@@ -280,12 +288,6 @@ func (s *Store) UpdateSettings(ctx context.Context, patch map[string]any, actor 
 				}
 			}
 			norm[k] = codes
-		case SettingSiteName:
-			sv, ok := v.(string)
-			if !ok || strings.TrimSpace(sv) == "" || len([]rune(sv)) > 64 {
-				return fmt.Errorf("invalid_setting: %s", k)
-			}
-			norm[k] = strings.TrimSpace(sv)
 		default:
 			return fmt.Errorf("invalid_setting: %s", k)
 		}

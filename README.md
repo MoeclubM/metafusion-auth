@@ -38,7 +38,7 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 | PUT | `/api/admin/users/{id}/role`、`/api/admin/users/{id}/password` | 管理员 | 改角色（`user/editor/admin`，不得降级最后一个管理员）/ 重置密码 |
 | PUT | `/api/admin/users/{id}/groups` | `auth.users.manage` | 设置该用户的权限组（`groups` 整组替换） |
 | PUT | `/api/admin/users/{id}/ban` | `auth.users.manage` | 封禁 / 解封（body `{"banned":true|false}`，缺字段 400 `invalid_payload`）；封禁同时删除该用户的会话、第三方令牌与未兑换授权码，且验签立即拒绝（见「账号封禁」） |
-| GET/PUT | `/api/admin/settings` | `auth.settings.manage` | 实例设置的读取与局部更新（管理台用） |
+| GET/PUT | `/api/admin/settings` | `auth.settings.manage` | 实例设置的读取与局部更新（管理台用）；只认接受表里的键，表外的键一律 `400 invalid_setting: <key>` |
 | GET/POST | `/api/admin/invites` | `auth.invites.manage` | 邀请码台账（`items`）/ 新建 |
 | POST | `/api/admin/invites/{code}/revoke` | `auth.invites.manage` | 作废邀请码 |
 | GET/POST | `/api/admin/groups` | `auth.groups.manage` | 权限组列表（`items`）/ 新建 |
@@ -64,6 +64,13 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 `auth_rate_limit_per_minute`，默认 `true` / 15 次每分钟，即接线前的强制值）。`enabled=false` 时不计数直接放行；
 改设置立即生效（策略有 5 秒短缓存，写设置时作废）。超限返回 429 `rate_limited` 与 `Retry-After`（秒）。
 PAT 内省是另一套独立限流（IP 与令牌双维度，**不读**上面两个设置），见「个人访问令牌」。
+
+实例设置（`GET/PUT /api/admin/settings`）当前只认 6 个键：`registration_enabled`、`invite_required`、
+`require_email_verification`、`auth_rate_limit_enabled`、`auth_rate_limit_per_minute`、
+`registration_default_groups`。表外的键一律 `400 invalid_setting: <key>`，读取面也只回传这张表里的键；
+写接口的**未知字段同样拒绝**（`400 invalid_payload`，见 `handler.body`），避免"载荷里的字段被静默吞掉"。
+**站点名不是实例设置**：它由前端构建期文案决定（主站与文档站的品牌文案随发布一起改），账号服务既不保存
+也不下发；历史上被写入过的 `site_name` 行留在库里，但不进任何读取面（`settingsWith` 只回传已知键）。
 
 ## 开发者中心（应用自助登记）
 
