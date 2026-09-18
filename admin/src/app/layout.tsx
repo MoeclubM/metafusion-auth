@@ -10,8 +10,9 @@ import { AppShell } from "@/components/AppShell";
 // 语言与登录态都按请求决定（NEXT_LOCALE cookie + 同域会话），因此不做静态预渲染。
 export const dynamic = "force-dynamic";
 
-export function generateMetadata(): Metadata {
-  const messages = getMessages(cookies().get(localeCookieName)?.value);
+// cookies() 是异步请求 API（Next 15 起返回 Promise，Next 16 不再接受同步取值）。
+export async function generateMetadata(): Promise<Metadata> {
+  const messages = getMessages((await cookies()).get(localeCookieName)?.value);
   return {
     title: messages["app.title"] ?? "MetaFusion auth-admin",
     description: messages["app.description"] ?? "",
@@ -19,8 +20,8 @@ export function generateMetadata(): Metadata {
   };
 }
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
-  const locale = normalizeLocale(cookies().get(localeCookieName)?.value);
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const locale = normalizeLocale((await cookies()).get(localeCookieName)?.value);
   return (
     <html lang={locale} className="dark">
       <body className="antialiased">
