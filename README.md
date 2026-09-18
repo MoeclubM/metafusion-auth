@@ -52,6 +52,7 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 | POST | `/api/admin/oauth/clients/{id}/rotate-secret` | `auth.oauth.manage` | 轮换密钥：明文只返回一次，老密钥立即失效 |
 | POST | `/api/admin/oauth/clients/{id}/revoke-tokens`、`/api/admin/users/{id}/revoke-oauth-tokens` | `auth.oauth.manage` | 吊销未过期令牌（连未兑换的授权码一起作废），按客户端或按用户 |
 | GET | `/api/admin/oauth/audits` | `auth.oauth.manage` | 授权审计（同意/拒绝与客户端管理动作，可按 `client_id` 过滤） |
+| GET | `/api/admin/audit-logs` | `auth.audit.read` | **跨服务审计留痕的唯一读取面**（catalog / auth / community / storage 的写操作都写 `audit.audit_log`）：过滤 `service`/`action`/`actor_user_id`/`actor`（用户名前缀）/`target_type`/`target_id`/`result`/`from`/`to`/`request_id`，分页 `page`/`per_page`（默认 1/50，上限 200），排序 `occurred_at DESC, id DESC`；非法参数 400 `invalid_query:<参数>`。字段与脱敏规则见 [审计留痕契约](https://github.com/MoeclubM/MetaFusion/blob/main/docs/architecture/audit-log.md) |
 | GET | `/api/.well-known/openid-configuration`、`/.well-known/openid-configuration` | 匿名 | OIDC 发现文档（两个入口同一份内容，地址取自 issuer） |
 | GET | `/api/oidc/jwks`、`/.well-known/jwks.json` | 匿名 | 验签公钥（JWKS） |
 | GET | `/api/developer/overview` | 登录 | 开发者中心的接入配置：issuer、端点地址（authorize / token / userinfo / jwks / discovery）、`grant_types`、scope 四语说明；**不含任何客户端清单** |
