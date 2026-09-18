@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useI18n } from "@/i18n/I18nProvider";
-import { describeApiError } from "./errors";
+import { describeApiError, describeCodedError } from "./errors";
 
 export interface Resource<T> {
   loading: boolean;
@@ -17,14 +17,18 @@ export interface Resource<T> {
 /**
  * 独立的只读资源加载器：**一个端点一个实例**。
  *
- * 管理面各接口所需的权限码不同（users / groups / invites / oauth / settings），
+ * 管理面各接口所需的权限码不同（users / groups / invites / oauth / settings / audit），
  * 任何一个 403 只应让它自己那一块降级，不能把整页拖黑——所以刻意不做"统一取数"。
  * loader 必须是稳定引用（直接传模块级函数），initial 必须是模块级常量，否则每次渲染都会重新取数。
+ *
+ * codeMap 可选：只读端点里也有带稳定错误码的失败（如审计读取面的 invalid_query），传进来就把
+ * 400 的裸码翻成人话；它同样必须是稳定引用（模块级常量），理由与 loader 相同。
  */
 export function useResource<T>(
   loader: () => Promise<T>,
   initial: T,
-  requiredPermission: string
+  requiredPermission: string,
+  codeMap?: Record<string, string>
 ): Resource<T> {
   const { t } = useI18n();
   const [loading, setLoading] = useState(true);
@@ -48,7 +52,11 @@ export function useResource<T>(
       .catch((err) => {
         // 失败时保留上一次成功的数据，但错误必须如实显示。
         if (!alive) return;
-        setError(describeApiError(err, t, requiredPermission));
+        setError(
+          codeMap
+            ? describeCodedError(err, t, requiredPermission, codeMap)
+            : describeApiError(err, t, requiredPermission)
+        );
         setStatus(typeof err === "object" && err !== null ? ((err as { status?: number }).status ?? null) : null);
       })
       .finally(() => {
@@ -57,7 +65,7 @@ export function useResource<T>(
     return () => {
       alive = false;
     };
-  }, [loader, nonce, t, requiredPermission]);
+  }, [loader, nonce, t, requiredPermission, codeMap]);
 
   return { loading, error, status, data, reload };
 }

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   ArrowLeft,
+  FileClock,
   KeyRound,
   LogOut,
   ScrollText,
@@ -27,6 +28,7 @@ const NAV: { key: SectionKey; href: string; icon: React.ReactNode }[] = [
   { key: "groups", href: "/groups", icon: <Shapes className="w-3.5 h-3.5" /> },
   { key: "invites", href: "/invites", icon: <Ticket className="w-3.5 h-3.5" /> },
   { key: "oauth", href: "/oauth-clients", icon: <KeyRound className="w-3.5 h-3.5" /> },
+  { key: "audit", href: "/audit", icon: <FileClock className="w-3.5 h-3.5" /> },
   { key: "instance", href: "/instance", icon: <ServerCog className="w-3.5 h-3.5" /> },
 ];
 

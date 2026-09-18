@@ -277,3 +277,79 @@ export function rotateOAuthClientSecret(id: string): Promise<OAuthClientSecret> 
 export function deleteOAuthClient(id: string): Promise<{ ok: boolean }> {
   return sendJson<{ ok: boolean }>(`/api/admin/oauth/clients/${encodeURIComponent(id)}`, "DELETE");
 }
+
+// ── 审计留痕（读取面） ──
+//
+// 契约来源（只读核对，本应用不改账号服务代码）：docs/architecture/audit-log.md §1 表结构、§4 脱敏、§5 读取面。
+// 唯一读取端点是账号服务的 GET /api/admin/audit-logs，权限码 auth.audit.read，排序 occurred_at DESC, id DESC。
+
+/**
+ * 审计表已知的服务名（契约 §1）。service 列本身没有 CHECK——按契约"新增服务不该改旧服务的 DDL"，
+ * 所以这里是输入提示（datalist）不是白名单：过滤值照原样发给服务端。
+ */
+export const AUDIT_SERVICES = ["catalog", "auth", "community", "storage"] as const;
+
+/** 审计行：audit.audit_log 的一行投影。changes 已在写入侧脱敏，界面原样展示。 */
+export interface AuditLogEntry {
+  id: string;
+  occurred_at: string;
+  service: string;
+  action: string;
+  actor_user_id?: string;
+  /** 操作者用户名**快照**：账号改名或删号后这行审计仍可读。 */
+  actor_username?: string;
+  /** session / pat / oauth / anonymous / system。 */
+  credential_type?: string;
+  actor_ip?: string;
+  actor_user_agent?: string;
+  target_type?: string;
+  target_id?: string;
+  /** 变更前后摘要；可能含 "[redacted]" 与 a***@domain 这类遮罩值。 */
+  changes?: Record<string, unknown> | null;
+  result?: string;
+  error_code?: string;
+  request_method?: string;
+  /** 路由模板（如 /api/admin/users/:id/role），不是原始路径。 */
+  route?: string;
+  http_status?: number;
+  request_id?: string;
+}
+
+/** 读取端点的过滤条件；空串与 undefined 一律不发（空串会被服务端当成非法值）。 */
+export interface AuditLogQuery {
+  service?: string;
+  /** 逗号分隔可多选。 */
+  action?: string;
+  actor_user_id?: string;
+  /** 用户名前缀匹配。 */
+  actor?: string;
+  target_type?: string;
+  target_id?: string;
+  result?: string;
+  /** RFC3339，闭区间。 */
+  from?: string;
+  to?: string;
+  request_id?: string;
+  page?: number;
+  per_page?: number;
+}
+
+export interface AuditLogPage {
+  items: AuditLogEntry[];
+  total: number;
+  page: number;
+  per_page: number;
+}
+
+/** 契约 §5：per_page 缺省 50、上限 200。管理台不提供改页大小，固定按缺省取。 */
+export const AUDIT_PAGE_SIZE = 50;
+
+export function fetchAuditLogs(query: AuditLogQuery): Promise<AuditLogPage> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined || value === null || value === "") continue;
+    params.set(key, String(value));
+  }
+  const qs = params.toString();
+  return getJson<AuditLogPage>(qs ? `/api/admin/audit-logs?${qs}` : "/api/admin/audit-logs");
+}

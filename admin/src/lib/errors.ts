@@ -113,3 +113,14 @@ export const OAUTH_ERROR_KEYS: Record<string, string> = {
   forbidden: "oauth.err.forbidden",
   invalid_payload: "oauth.err.invalidPayload",
 };
+
+/**
+ * 审计读取面的稳定错误码表（docs/architecture/audit-log.md §5）。
+ *
+ * 它只报 invalid_query：非法 uuid、非法 result、非法时间、越界分页都是 400 + 这个码；
+ * 403（缺 auth.audit.read）由 describeApiError 统一说清要哪个码。
+ */
+export const AUDIT_ERROR_KEYS: Record<string, string> = {
+  invalid_query: "audit.err.invalidQuery",
+  forbidden: "audit.err.forbidden",
+};
