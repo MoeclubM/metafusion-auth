@@ -68,7 +68,10 @@ PAT 内省是另一套独立限流（IP 与令牌双维度，**不读**上面两
 实例设置（`GET/PUT /api/admin/settings`）当前只认 6 个键：`registration_enabled`、`invite_required`、
 `require_email_verification`、`auth_rate_limit_enabled`、`auth_rate_limit_per_minute`、
 `registration_default_groups`。表外的键一律 `400 invalid_setting: <key>`，读取面也只回传这张表里的键；
-写接口的**未知字段同样拒绝**（`400 invalid_payload`，见 `handler.body`），避免"载荷里的字段被静默吞掉"。
+写接口的**未知字段同样拒绝**（`400 invalid_payload`，见 `handler.body` 的 `DisallowUnknownFields`），
+避免"载荷里的字段被静默吞掉"：`/api/setup`、`/api/auth/*`、`/api/admin/*`、`/api/developer/*` 的 JSON
+写接口统一走它。唯一的例外是 `/api/oauth/token`：按 OAuth 2.0 规范先读表单参数、再回落 `c.BindJSON`，
+规范之外的附加参数按规范保留。
 **站点名不是实例设置**：它由前端构建期文案决定（主站与文档站的品牌文案随发布一起改），账号服务既不保存
 也不下发；历史上被写入过的 `site_name` 行留在库里，但不进任何读取面（`settingsWith` 只回传已知键）。
 

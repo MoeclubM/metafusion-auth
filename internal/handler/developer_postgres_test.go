@@ -50,10 +50,26 @@ func TestDeveloperCenterAgainstPostgres(t *testing.T) {
 		}
 	})
 
-	// 自助登记：请求体里塞 trusted/verified/disabled 也必须无效。
-	createBody := `{"name":"开发者中心示例","description":"读取资料","homepage_url":"https://developer.example",` +
+	// 自助登记：请求体里塞 trusted/verified/disabled 会被**明确拒绝**（400 invalid_payload），
+	// 而不是静默忽略——这三项只能由管理员在管理面写（口径见 store.OAuthClientInput 的注释）。
+	adminFields := `{"name":"开发者中心示例","description":"读取资料","homepage_url":"https://developer.example",` +
 		`"redirect_uris":["` + callback + `"],"scopes":["openid","email"],` +
 		`"trusted":true,"verified":true,"disabled":true}`
+	if w := doJSON(t, r, http.MethodPost, "/api/developer/apps", memberBearer, adminFields); w.Code != http.StatusBadRequest ||
+		!strings.Contains(w.Body.String(), "invalid_payload") {
+		t.Fatalf("带管理面字段的自助登记应 400 invalid_payload，实际 %d：%s", w.Code, w.Body.String())
+	}
+	var leaked int
+	if err := st.DB.QueryRowContext(ctx, "SELECT count(*) FROM auth.oauth_clients WHERE owner_user_id=$1", memberID).Scan(&leaked); err != nil {
+		t.Fatalf("统计登记结果: %v", err)
+	}
+	if leaked != 0 {
+		t.Fatalf("被拒绝的登记不得落库，实际 %d 行", leaked)
+	}
+
+	// 只带声明字段的同一载荷照旧登记成功（管理面列由服务端置 false）。
+	createBody := `{"name":"开发者中心示例","description":"读取资料","homepage_url":"https://developer.example",` +
+		`"redirect_uris":["` + callback + `"],"scopes":["openid","email"]}`
 	w := doJSON(t, r, http.MethodPost, "/api/developer/apps", memberBearer, createBody)
 	if w.Code != http.StatusOK {
 		t.Fatalf("自助登记: %d %s", w.Code, w.Body.String())

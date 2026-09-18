@@ -40,11 +40,25 @@ func TestDeveloperAppRegistrationAndOwnership(t *testing.T) {
 		}
 	}
 
-	// 登记：请求体里塞 trusted/verified/disabled 也必须无效——这三项不在这条路径的写入形状里，
-	// 能不能成为"自有平台"由管理员决定，不由请求方声明。
-	body := `{"name":"第三方示例","description":"读取资料","homepage_url":"https://third.example",` +
+	// 登记：请求体里塞 trusted/verified/disabled 现在**被明确拒绝**（400 invalid_payload）——
+	// 这三项不在这条路径的写入形状里，能不能成为"自有平台"由管理员在管理面决定。
+	// 此前它们被静默忽略（200 但列不生效）：请求方以为自己的应用已被信任，这正是审计要收敛的
+	// "接受但忽略"（口径见 store.OAuthClientInput 的注释与 handler.body 的 DisallowUnknownFields）。
+	adminFields := `{"name":"第三方示例","description":"读取资料","homepage_url":"https://third.example",` +
 		`"redirect_uris":["https://third.example/cb"],"scopes":["openid","email"],` +
 		`"trusted":true,"verified":true,"disabled":true}`
+	if w := doJSON(t, r, http.MethodPost, "/api/developer/apps", ownerBearer, adminFields); w.Code != http.StatusBadRequest ||
+		!strings.Contains(w.Body.String(), "invalid_payload") {
+		t.Fatalf("带管理面字段的登记应 400 invalid_payload，实际 %d：%s", w.Code, w.Body.String())
+	}
+	if apps, err := fake.ListDeveloperApps(context.Background(), &owner); err != nil || len(apps) != 0 {
+		t.Fatalf("被拒绝的登记不得留下应用: n=%d err=%v", len(apps), err)
+	}
+
+	// 只带声明字段的同一载荷照旧登记成功：管理面列一律由服务端置 false，
+	// 请求方无法借载荷声明"自有平台"。
+	body := `{"name":"第三方示例","description":"读取资料","homepage_url":"https://third.example",` +
+		`"redirect_uris":["https://third.example/cb"],"scopes":["openid","email"]}`
 	w := doJSON(t, r, http.MethodPost, "/api/developer/apps", ownerBearer, body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("登记应 200，实际 %d：%s", w.Code, w.Body.String())
