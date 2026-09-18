@@ -30,12 +30,14 @@ type Handler struct {
 	// developer 是开发者中心的存储能力（生产环境同样是下面的 store）。
 	// 与 oauth 分开注入：两条路径的判定不同（一个按权限码，一个按应用归属）。
 	developer developerStore
+	// tokens 是个人访问令牌（PAT）端点的存储能力（生产环境同样是下面的 store）。
+	tokens patStore
 	// rateLimitPolicy 覆盖"是否限流、每分钟几次"的来源：生产为 nil（走 store 的实例设置），
 	// 用例据此在不建库的前提下断言开关与速率。
 	rateLimitPolicy func(context.Context) (bool, int)
 }
 
-func New(s *store.Store) *Handler { return &Handler{store: s, oauth: s, developer: s} }
+func New(s *store.Store) *Handler { return &Handler{store: s, oauth: s, developer: s, tokens: s} }
 
 // Register 挂载全部路由。限流沿用主仓库的口径：只对认证写入类接口按 IP 固定窗口限流，
 // 但速率与开关按请求读实例设置（auth_rate_limit_enabled / auth_rate_limit_per_minute），
@@ -47,6 +49,8 @@ func (h *Handler) Register(r *gin.Engine) {
 	h.registerAuth(api, limiter)
 	h.registerOAuth(api, limiter)
 	h.registerDeveloper(api, limiter)
+	// 个人访问令牌：/api/auth/tokens*（自助创建/列出/吊销 + 下游用的内省）。
+	h.registerTokens(api, limiter)
 	// 公开账号资料 GET /users/:id（匿名可读，email 仅本人可见）。
 	h.registerPublicUsers(api)
 
@@ -476,6 +480,9 @@ func respond(c *gin.Context, v any, err error) {
 		// 403 才能让前端提示"账号已停用，请联系站务"。
 		status = http.StatusForbidden
 	case code == "client_not_found":
+		status = http.StatusNotFound
+	case code == "token_not_found":
+		// 不是本人的令牌按"不存在"处理：不把"这张令牌属于别人"透给调用方。
 		status = http.StatusNotFound
 	}
 	c.JSON(status, gin.H{"error": code})
