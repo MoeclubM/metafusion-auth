@@ -6,3 +6,8 @@ bin/
 admin/node_modules/
 admin/.next/
 admin/tsconfig.tsbuildinfo
+
+# 自助应用（user/，Next.js 独立应用：登录/注册/初始化）
+user/node_modules/
+user/.next/
+user/tsconfig.tsbuildinfo
