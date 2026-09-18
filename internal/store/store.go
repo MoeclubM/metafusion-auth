@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 )
 
 // User 是账号的对外投影；password_hash 永不出现在 JSON 里。
@@ -39,6 +40,10 @@ type Store struct {
 	cacheMu     sync.Mutex
 	rateLimit   *cachedRateLimit
 	bannedCache map[string]bannedEntry
+
+	// patTouched 记录"这条 PAT 上次写 last_used_at 的时刻"：内省是读路径，每请求一次 UPDATE
+	// 会把它变成写路径（行锁 + WAL）。与下游的结果缓存同为 60 秒节奏，见 pat.go。
+	patTouched map[string]time.Time
 }
 
 // schema 是 auth schema 的唯一来源（主仓库曾经的 schema.sql 已随迁移基线收敛删除），
@@ -134,6 +139,18 @@ CREATE TABLE IF NOT EXISTS auth.user_groups (
  granted_by uuid, granted_at timestamptz NOT NULL DEFAULT now(),
  PRIMARY KEY (user_id, group_id)
 );
+-- 个人访问令牌（PAT）：外部应用、Agent 与 CI 的长期机器接入凭证（实现见 pat.go）。
+-- token_hash 是唯一的查询键（明文从不落库，因此不可能"取回"）；token_prefix 供界面展示"哪一张"；
+-- scopes 是权限码，最终有效权限 = 账号现时权限 ∩ scopes；expires_at 为空表示永不过期；
+-- 吊销只写 revoked_at，不删行——列表要能继续显示"这张已经失效"，审计也要留痕。
+CREATE TABLE IF NOT EXISTS auth.personal_access_tokens (
+ id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+ name text NOT NULL, token_hash text NOT NULL UNIQUE, token_prefix text NOT NULL,
+ scopes text[] NOT NULL DEFAULT '{}', expires_at timestamptz, last_used_at timestamptz,
+ created_at timestamptz NOT NULL DEFAULT now(), revoked_at timestamptz
+);
+-- 列表与配额按 user_id 统计（每账号最多 10 张未吊销令牌），单独建索引避免全表扫。
+CREATE INDEX IF NOT EXISTS personal_access_tokens_user_idx ON auth.personal_access_tokens(user_id);
 `
 
 // seedClients 是第一方 OAuth 客户端的种子：这三个客户端原先由目录服务在启动时写入
