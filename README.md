@@ -6,8 +6,8 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 
 ## 职责边界
 
-- **拥有**：`auth.users`、`auth.sessions`、`auth.oauth_clients`、`auth.oauth_codes`、`auth.oauth_tokens`、
-  `auth.oauth_audit` 与 RSA 密钥（令牌签发/注销/JWKS）。
+- **拥有**：`auth.users`、`auth.sessions`、`auth.personal_access_tokens`、`auth.oauth_clients`、
+  `auth.oauth_codes`、`auth.oauth_tokens`、`auth.oauth_audit` 与 RSA 密钥（令牌签发/注销/JWKS）。
 - **对外**：签发短期 RS256 访问令牌（15 分钟）+ 服务端会话轮转（refresh），并提供 JWKS 供其他服务本地验签。
 - **不拥有**：实体元数据（目录服务）、文件（存储服务）、论坛与互动记录（互动服务）。
   其他服务只验签、不查本服务的库；本服务也不读它们的库。
@@ -31,6 +31,9 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 | POST | `/api/auth/logout-all` | 令牌 | 吊销该用户全部会话 |
 | GET | `/api/auth/oauth-grants` | 令牌 | 我授权过的第三方应用（`items`：`client_id`/`name`/`scopes`/`active`/`last_authorized_at`/`expires_at`） |
 | DELETE | `/api/auth/oauth-grants/{client_id}` | 令牌 | 撤回**我自己**对该应用的授权（删未过期令牌与未兑换授权码，回 `{"ok":true,"revoked":N}`；只作用于本人） |
+| GET/POST | `/api/auth/tokens` | 令牌 | 个人访问令牌（PAT）：列出**本人**的令牌 / 创建（`201` 回明文 + 元数据，明文只此一次），见「个人访问令牌」 |
+| DELETE | `/api/auth/tokens/{id}` | 令牌 | 吊销本人的 PAT（写 `revoked_at`，不删行；幂等） |
+| POST | `/api/auth/tokens/introspect` | **无** | 内省：下游服务凭明文换 `{valid,user_id,username,role,permissions[],expires_at}`；无效/吊销/过期/封禁统一 `401 invalid_token` |
 | GET/POST | `/api/admin/users` | 管理员 | 账号列表（含 `banned`）/ 创建账号（默认角色 `editor`） |
 | PUT | `/api/admin/users/{id}/role`、`/api/admin/users/{id}/password` | 管理员 | 改角色（`user/editor/admin`，不得降级最后一个管理员）/ 重置密码 |
 | PUT | `/api/admin/users/{id}/groups` | `auth.users.manage` | 设置该用户的权限组（`groups` 整组替换） |
@@ -60,6 +63,7 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 限流：认证写入类接口按 IP 固定窗口限流，**速率与开关来自实例设置**（`auth_rate_limit_enabled` /
 `auth_rate_limit_per_minute`，默认 `true` / 15 次每分钟，即接线前的强制值）。`enabled=false` 时不计数直接放行；
 改设置立即生效（策略有 5 秒短缓存，写设置时作废）。超限返回 429 `rate_limited` 与 `Retry-After`（秒）。
+PAT 内省是另一套独立限流（IP 与令牌双维度，**不读**上面两个设置），见「个人访问令牌」。
 
 ## 开发者中心（应用自助登记）
 
@@ -98,6 +102,58 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 护栏两条（与"不得降级最后一个管理员"同口径）：**不能封自己**（`cannot_ban_self`），
 **不能封掉最后一个还能登录的管理员**（`cannot_ban_sole_admin`，已封禁的管理员不计入剩余数量）。
 解封只需再调一次 `{"banned":false}`。
+
+## 个人访问令牌（PAT）
+
+外部应用、Agent 与 CI 的长期机器接入凭证。明文格式：`mfp_` + 32 字节随机数的 base62 定长表示
+（共 47 字符，`^mfp_[0-9A-Za-z]{43}$`）；库里只存哈希与展示前缀（明文前 12 字符）。
+
+| 方法 | 路径 | 鉴权 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/api/auth/tokens` | 令牌 | 只列**本人**的令牌（`items`：`id`/`name`/`token_prefix`/`scopes`/`expires_at`/`last_used_at`/`created_at`/`revoked_at`/`active`） |
+| POST | `/api/auth/tokens` | 令牌 | 创建（`name` / `scopes[]` **至少一个权限码** / `expires_in_days?`，0 或缺省 = 永不过期）→ `201 {token, item}`，**明文只此一次** |
+| DELETE | `/api/auth/tokens/{id}` | 令牌 | 吊销本人的令牌（写 `revoked_at`，不删行；幂等，已吊销再删仍 200；不是本人的一律 404 `token_not_found`） |
+| POST | `/api/auth/tokens/introspect` | 无 | 内省（下游服务调用）：body `{"token":"mfp_..."}` → `{valid,user_id,username,role,permissions[],scopes[],token_prefix,expires_at}` |
+
+- **明文只出现一次**：`auth.personal_access_tokens.token_hash` 是 SHA-256 十六进制（唯一索引）+
+  `token_prefix`（明文前 12 字符）。为什么不是 bcrypt：PAT 明文是 32 字节高熵随机串，不存在被猜解的
+  口令空间，而校验必须能按哈希**直查**（bcrypt 每行自带盐，无法索引查询）。
+- **scopes 是权限码**（`catalog.entity.edit`、`storage.asset.upload` …），且必须是**账号自己持有**的码：
+  超出本人权限的创建直接拒绝（`400 scope_not_granted: <code>`），不静默取交集——否则用户会拿到
+  一张比他要的更弱的令牌却毫无察觉。
+- **空 scopes 被拒绝**（`400 invalid_scope: empty`，缺失该字段、传 `[]` 或全空白都算）：创建时必须
+  至少给一个权限码。理由不是洁癖：**没有权限的令牌在既有判定下会变成全权令牌**——`Can` 在
+  `permissions` 为空时按 `role` 兜底到 admin/editor，而这条兜底在下游照抄 `Can` 的地方一定会生效，
+  于是"什么都做不了"的令牌对管理员账号等于全权 PAT。与其留一个静默扩权的语义，不如在创建时挡住。
+- **有效权限 = 账号现时权限 ∩ 该 PAT 的 scopes**，内省每次回表重算（账号权限被收回后，
+  同一张令牌的下一次内省立刻就窄了）。下游仍然只用一份权限判定，不需要为 PAT 写第二套逻辑。
+- **下游的判定口径（第二道防线，必须照做）**：PAT principal 一律用
+  `HasPermission(principal.Permissions, code)` 语义判定。`permissions` 非空时它与 `Can(user, code)`
+  完全等价，但**为空时只有它安全**：`Can` 会按 `role` 兜底到 admin/editor。交集为空是真会发生的
+  （创建后账号丢了那个权限码），此时令牌应当什么都做不了，而不是变成全权令牌。
+- **内省不缓存、下游缓存 60 秒**：本服务每次内省都查库（自身即时），下游按 `token_hash` 缓存 60 秒，
+  因此**端到端吊销最长 60 秒生效**——不要对用户声称立即失效。
+- **限流**：内省按来源 IP（600 次/分）与令牌哈希（60 次/分）双维度固定窗口；超限 `429 rate_limited`
+  与 `Retry-After: 60`。两个维度都**不读实例设置**：内省是读语义，`auth_rate_limit_*` 是认证写入类
+  端点的开关，为压注册洪水关掉写入限流不该连带松开下游的鉴权限流。
+- **错误不区分原因**：不存在 / 已吊销 / 已过期 / 账号被封禁一律 `401 {"error":"invalid_token"}`
+  （区分原因等于告诉探测者"这个令牌曾经有效"）；只有"读不动库"是 `503 introspection_unavailable`，
+  下游必须把非 200 一律当作"不认这个令牌"（fail-closed）。
+- **PAT 不是登录态**：三条自助端点只认访问令牌或 `mf_session` Cookie，`Authorization: Bearer mfp_...`
+  按匿名处理（401）；这些请求**不产出 `mf_session`**（内省也不）。因此"PAT 不能再创建 PAT"天然成立。
+- **创建参数校验**：名称 1–64 字（`400 invalid_token_name`）；权限码格式非法 `400 invalid_scope: <code>`、
+  一个码都没有 `400 invalid_scope: empty`；`expires_in_days` 取 1–3650（`400 invalid_expiry`）；
+  每账号最多 10 张未吊销令牌（`400 token_limit_reached`，吊销一张即可再建）。
+- **`last_used_at` 的写节奏**：同一条令牌 **60 秒内只写一次**（与下游缓存同节奏）：内省在每个
+  未命中缓存的请求上都会被调用，逐次 UPDATE 会把读路径变成写路径。
+- **`X-API-Key`**：字典里承诺的另一种携带方式由下游服务（目录 / 互动 / 存储）在各自的鉴权中间件里
+  解析成同一张令牌再调内省，本服务不额外提供入口。
+- **表与迁移**：新表 `auth.personal_access_tokens` 按本服务既有约定只**追加**在 `Init` 的 DDL 末尾
+  （`CREATE TABLE IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS`，既有语句一字未改），列形状冻结在
+  `internal/store/pat_schema_parity_test.go`；真库回归见 `internal/store/pat_test.go` 与
+  `internal/handler/pat_postgres_test.go`。
+- **管理他人令牌未做**（`/api/admin/tokens*` 本轮留空）：要做时沿用开发者面那套归属判定 +
+  `auth.oauth_audit` 审计动作，别把"管理员能看全量"塞进 `/api/auth/tokens` 的归属判定里。
 
 ## OAuth 授权方（同意、scope 与吊销）
 
@@ -155,8 +211,10 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 ## 令牌与密钥
 
 - 算法固定 RS256；验签只接受 RS256，拒绝 `none`/`HS*`，避免算法混淆攻击。
-- 私钥来自 `AUTH_JWT_PRIVATE_KEY`（PEM 或 base64 后的 PEM，PKCS#1/PKCS#8）；
-  未配置时生成进程内临时密钥并打印告警——服务仍可启动，但重启后已签发令牌失效（靠会话兜底）。
+- 私钥来自 `AUTH_JWT_PRIVATE_KEY`（PEM 或 base64 后的 PEM，PKCS#1/PKCS#8）；**未配置即拒绝启动**
+  ——进程内临时密钥会让每次重启都静默换掉签发密钥、JWKS 发布没人固定过的公钥（审计 S-9）。
+  只有显式打开本地开发开关 `AUTH_JWT_ALLOW_EPHEMERAL_KEY` 才回退到进程内临时密钥
+  （重启后已签发令牌失效，靠会话兜底），此时启动会打 WARNING。
 - `issuer`/`audience` 必须与主仓库完全一致（默认 `https://findverse.cc/api` / `metafusion`），
   否则存量令牌全部失效；受众按登记集合校验，OIDC `id_token` 以 `client_id` 为受众。
 - 注销为单实例内存实现（jti 集合直到自然过期）：多副本部署需要共享状态，当前未支持。
@@ -173,8 +231,10 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
   `ON CONFLICT DO NOTHING` 保护后台改过的配置。目录服务现在**不再创建、也不再写入任何 auth 对象**。
 - 该服务**没有版本化迁移**：建表语句即当前终态，改动需同时更新冻结用例。
 - 本轮新增的列与表都以 `ADD COLUMN IF NOT EXISTS` / `CREATE TABLE IF NOT EXISTS` 写在 `Init` 里
-  （`oauth_clients.scopes`、`oauth_clients.disabled`、`oauth_tokens.jti`、`auth.oauth_audit`），
-  老库启动即补齐，不需要手工迁移；冻结值同步在 `schema_parity_test.go` 与 `schema_lifecycle_parity_test.go`。
+  （`oauth_clients.scopes`、`oauth_clients.disabled`、`oauth_tokens.jti`、`auth.oauth_audit`、
+  `auth.personal_access_tokens`），老库启动即补齐，不需要手工迁移；冻结值同步在
+  `schema_parity_test.go`、`schema_lifecycle_parity_test.go` 与 `pat_schema_parity_test.go`。
+  追加只加在末尾：既有语句一字不改（幂等 DDL 就是本服务的"up-only 追加"）。
 
 ## 环境变量
 
@@ -182,7 +242,8 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 | --- | --- | --- |
 | `PORT` | `8081` | 监听端口 |
 | `DATABASE_URL` | 由 `DB_*` 拼装 | PostgreSQL 连接串（只使用 `auth` schema） |
-| `AUTH_JWT_PRIVATE_KEY` | 空 | RS256 私钥（PEM / base64 PEM） |
+| `AUTH_JWT_PRIVATE_KEY` | **必填** | RS256 私钥（PEM / base64 PEM）；为空即拒绝启动 |
+| `AUTH_JWT_ALLOW_EPHEMERAL_KEY` | 空 | 本地开发开关：`1`/`true`/`yes`/`on` 时允许进程内临时密钥（生产不要开，启动会打 WARNING） |
 | `AUTH_JWT_ISSUER` / `AUTH_JWT_AUDIENCE` | `https://findverse.cc/api` / `metafusion` | 必须与主仓库一致 |
 | `AUTH_ACCOUNT_URL` | 空 | 未登录跳转的账号页绝对地址；为空则用站点相对路径 `/account` |
 
@@ -202,7 +263,9 @@ AUTH_TEST_DSN='postgres://user:pw@127.0.0.1:5432/metafusion_test?sslmode=disable
   是否给第三方单独放宽 TTL 属产品决策，当前未放宽。
 - **同意不记忆**：每次授权都会重新询问（`trusted` 客户端除外）。用户已可通过
   `GET /api/auth/oauth-grants` 自查并撤回（见「吊销」），但同意页仍不做"已授权则跳过"。
-- **没有 introspection / RFC 7009 撤销端点**：下游本地验签的令牌无法即时撤销（见上）。
+- **RFC 7009 撤销端点没有**；introspection 只对 PAT 有（`POST /api/auth/tokens/introspect`）：
+  无状态访问令牌仍是"下游本地验签 + 等 15 分钟自然过期"，PAT 走的才是可撤销的内省路径。
+- **PAT 的管理面未做**：管理员无法列出 / 吊销他人的令牌（本轮只做自助 + 内省）。
 - **jti 注销集合是单实例内存实现**：多副本部署需要共享状态（Redis 集合），当前未支持。
 - **公开资料只有账号列**：`auth.users` 里没有 `display_name` / `avatar_url` / `bio` / `created_at` /
   `favorites_public` 这些展示列，`GET /api/users/:id` 因此**不返回**它们，也不填占位值——

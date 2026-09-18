@@ -117,3 +117,35 @@ func TestVerifyPKCE(t *testing.T) {
 		t.Fatal("无 challenge 的存量授权码应放行")
 	}
 }
+
+// 未配置私钥时的语义（审计 S-9）：默认拒绝启动，只有显式打开本地开发开关才允许临时密钥。
+// 反向验证：把 ephemeralKeyAllowed 的默认分支改成 true（即原先的静默降级），本用例立即失败。
+func TestEphemeralKeyRequiresExplicitOptIn(t *testing.T) {
+	t.Setenv("AUTH_JWT_PRIVATE_KEY", "")
+	// 空值、错拼、显式关闭一律拒绝：开关写错不能把生产悄悄变回静默降级。
+	for _, wrong := range []string{"", "0", "false", "yes-please", "ephemeral", "off"} {
+		t.Setenv("AUTH_JWT_ALLOW_EPHEMERAL_KEY", wrong)
+		if _, err := NewTokenIssuerFromEnv("https://findverse.cc/api", "metafusion"); err == nil {
+			t.Fatalf("AUTH_JWT_ALLOW_EPHEMERAL_KEY=%q 时必须拒绝启动（不得静默使用进程内临时密钥）", wrong)
+		}
+	}
+	// 显式真值：允许临时密钥，且必须被标记出来（调用方据此打 WARNING）。
+	for _, right := range []string{"1", "true", "YES", "on"} {
+		t.Setenv("AUTH_JWT_ALLOW_EPHEMERAL_KEY", right)
+		iss, err := NewTokenIssuerFromEnv("https://findverse.cc/api", "metafusion")
+		if err != nil {
+			t.Fatalf("显式开关 %q 下应允许临时密钥: %v", right, err)
+		}
+		if !iss.Ephemeral() {
+			t.Fatalf("显式开关 %q 下应标记为临时密钥（调用方据此告警）", right)
+		}
+		// "允许"必须真的可用：签得出、验得回。
+		token, _, _, err := iss.Sign(User{ID: "11111111-1111-1111-1111-111111111111", Username: "kana", Role: "user"})
+		if err != nil {
+			t.Fatalf("临时密钥签发失败: %v", err)
+		}
+		if _, err := iss.Verify(token); err != nil {
+			t.Fatalf("临时密钥验签失败: %v", err)
+		}
+	}
+}

@@ -31,15 +31,18 @@ func main() {
 		log.Fatalf("auth schema initialization failed: %v", err)
 	}
 
-	// 无状态访问令牌：配置 AUTH_JWT_PRIVATE_KEY 时用持久 RSA 私钥签发 RS256 JWT；
-	// 未配置则生成进程内临时密钥（重启即失效，靠查库兜底），保证服务仍可启动。
+	// 无状态访问令牌：AUTH_JWT_PRIVATE_KEY 是持久 RSA 私钥，**未配置即拒绝启动**——
+	// 进程内临时密钥会让每次重启都换掉签发密钥，已签发令牌静默失效、JWKS 换公钥无人知晓
+	// （审计 S-9）。只有显式设了 AUTH_JWT_ALLOW_EPHEMERAL_KEY 的本地开发环境才会走到
+	// 临时密钥分支，且必须打告警。
 	issuer, err := store.NewTokenIssuerFromEnv(env("AUTH_JWT_ISSUER", "https://findverse.cc/api"), env("AUTH_JWT_AUDIENCE", "metafusion"))
 	if err != nil {
 		log.Fatalf("auth token issuer initialization failed: %v", err)
 	}
 	s.Tokens = issuer
 	if issuer.Ephemeral() {
-		log.Print("AUTH_JWT_PRIVATE_KEY is unset; using an in-process RSA key (tokens expire on restart)")
+		log.Print("WARNING: AUTH_JWT_ALLOW_EPHEMERAL_KEY is on — signing with an in-process RSA key. " +
+			"Every restart invalidates all issued tokens and rotates the published JWKS; never enable this outside local development")
 	}
 	// issuer 与 audience 对所有依赖方必须完全一致，否则已签发的令牌全部失效。
 	log.Printf("auth issuer=%s audience=%s", issuer.Issuer(), issuer.Audience())

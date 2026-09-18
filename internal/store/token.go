@@ -73,8 +73,12 @@ func (t *TokenIssuer) clock() time.Time {
 }
 
 // NewTokenIssuerFromEnv 从 AUTH_JWT_PRIVATE_KEY 读取 RSA 私钥（PEM 文本，或
-// 其 base64 编码），支持 PKCS#1 与 PKCS#8。未配置时生成进程内临时密钥：系统
-// 仍可启动并签发/验签，但重启后旧令牌全部失效——双模式的查库兜底会接管。
+// 其 base64 编码），支持 PKCS#1 与 PKCS#8。
+//
+// 未配置私钥时**默认拒绝启动**：进程内临时密钥意味着每次重启都换掉签发密钥——已签发令牌
+// 静默失效、JWKS 发布出去的是没人固定过的公钥、密钥轮换无人知晓，而这一切原先只留一行日志
+// （2026-09-19 审计 S-9）。只有显式打开本地开发开关 AUTH_JWT_ALLOW_EPHEMERAL_KEY 才回退到
+// 临时密钥，调用方（cmd/server）会为此打一条 WARNING。
 func NewTokenIssuerFromEnv(issuer, audience string) (*TokenIssuer, error) {
 	t := &TokenIssuer{issuer: issuer, audience: audience, revoked: map[string]int64{}, audiences: map[string]bool{}}
 	if audience != "" {
@@ -82,6 +86,10 @@ func NewTokenIssuerFromEnv(issuer, audience string) (*TokenIssuer, error) {
 	}
 	raw := strings.TrimSpace(os.Getenv("AUTH_JWT_PRIVATE_KEY"))
 	if raw == "" {
+		if !ephemeralKeyAllowed() {
+			return nil, errors.New("AUTH_JWT_PRIVATE_KEY is required: refusing to start with an in-process key " +
+				"(tokens would silently expire on every restart; for local development only, set AUTH_JWT_ALLOW_EPHEMERAL_KEY=1)")
+		}
 		key, err := rsa.GenerateKey(rand.Reader, 2048)
 		if err != nil {
 			return nil, err
@@ -114,8 +122,19 @@ func NewTokenIssuerFromEnv(issuer, audience string) (*TokenIssuer, error) {
 	return t, nil
 }
 
-// Ephemeral 表示当前使用进程内临时密钥（未配置 AUTH_JWT_PRIVATE_KEY），
-// 重启即失效；调用方可据此提示运维配置持久密钥。
+// ephemeralKeyAllowed 是显式的本地开发开关：只认明确的真值，空值、拼错或任何其它取值都按
+// "不允许"处理（fail closed——开关写错不能把生产悄悄变回静默降级）。
+func ephemeralKeyAllowed() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("AUTH_JWT_ALLOW_EPHEMERAL_KEY"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+// Ephemeral 表示当前使用进程内临时密钥：只在显式打开 AUTH_JWT_ALLOW_EPHEMERAL_KEY 时可能为真
+// （见 NewTokenIssuerFromEnv），调用方据此打告警。
 func (t *TokenIssuer) Ephemeral() bool { return t != nil && t.ephemeral }
 
 func (t *TokenIssuer) Issuer() string   { return t.issuer }
