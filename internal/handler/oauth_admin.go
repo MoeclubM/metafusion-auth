@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/MoeclubM/metafusion-auth/internal/audit"
 	"github.com/MoeclubM/metafusion-auth/internal/store"
 )
 
@@ -31,6 +32,7 @@ func (h *Handler) registerOAuthAdmin(api *gin.RouterGroup) {
 			respond(c, nil, err)
 			return
 		}
+		audit.Describe(c, audit.Detail{TargetType: "oauth_client", TargetID: client.ID, Changes: oauthClientChanges(nil, &client)})
 		// 明文密钥只在这一个响应里出现：库里只有 bcrypt 哈希，之后无法再读。
 		respond(c, gin.H{"client": client, "client_secret": secret}, nil)
 	})
@@ -39,7 +41,11 @@ func (h *Handler) registerOAuthAdmin(api *gin.RouterGroup) {
 		if !body(c, &in) {
 			return
 		}
+		before, _ := s.GetOAuthClient(c.Request.Context(), c.Param("id"))
 		client, err := s.UpdateOAuthClient(c.Request.Context(), c.Param("id"), in, currentUser(c))
+		if err == nil {
+			audit.Describe(c, audit.Detail{TargetType: "oauth_client", TargetID: client.ID, Changes: oauthClientChanges(before, &client)})
+		}
 		respond(c, gin.H{"client": client}, err)
 	})
 	api.POST("/admin/oauth/clients/:id/rotate-secret", manage, func(c *gin.Context) {
@@ -48,10 +54,15 @@ func (h *Handler) registerOAuthAdmin(api *gin.RouterGroup) {
 			respond(c, nil, err)
 			return
 		}
+		audit.Describe(c, audit.Detail{TargetType: "oauth_client", TargetID: client.ID,
+			Changes: map[string]any{"secret_rotated": true}})
 		respond(c, gin.H{"client": client, "client_secret": secret}, nil)
 	})
 	api.DELETE("/admin/oauth/clients/:id", manage, func(c *gin.Context) {
-		respond(c, gin.H{"ok": true}, s.DeleteOAuthClient(c.Request.Context(), c.Param("id"), currentUser(c)))
+		before, _ := s.GetOAuthClient(c.Request.Context(), c.Param("id"))
+		err := s.DeleteOAuthClient(c.Request.Context(), c.Param("id"), currentUser(c))
+		audit.Describe(c, audit.Detail{TargetType: "oauth_client", TargetID: c.Param("id"), Changes: oauthClientChanges(before, nil)})
+		respond(c, gin.H{"ok": true}, err)
 	})
 
 	// 吊销：按客户端（某个第三方站点的全部授权）或按用户（某个人给出去的全部授权）。
@@ -59,10 +70,18 @@ func (h *Handler) registerOAuthAdmin(api *gin.RouterGroup) {
 	// 那是 /api/auth/logout-all 的职责。
 	api.POST("/admin/oauth/clients/:id/revoke-tokens", manage, func(c *gin.Context) {
 		n, err := s.RevokeOAuthTokensByClient(c.Request.Context(), c.Param("id"), currentUser(c))
+		if err == nil {
+			audit.Describe(c, audit.Detail{TargetType: "oauth_client", TargetID: c.Param("id"),
+				Changes: map[string]any{"revoked": n}})
+		}
 		respond(c, gin.H{"revoked": n}, err)
 	})
 	api.POST("/admin/users/:id/revoke-oauth-tokens", manage, func(c *gin.Context) {
 		n, err := s.RevokeOAuthTokensByUser(c.Request.Context(), c.Param("id"), currentUser(c))
+		if err == nil {
+			audit.Describe(c, audit.Detail{TargetType: "user", TargetID: c.Param("id"),
+				Changes: map[string]any{"revoked": n}})
+		}
 		respond(c, gin.H{"revoked": n}, err)
 	})
 

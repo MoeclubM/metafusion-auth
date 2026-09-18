@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/MoeclubM/metafusion-auth/internal/audit"
 	"github.com/MoeclubM/metafusion-auth/internal/store"
 )
 
@@ -76,6 +77,7 @@ func (h *Handler) registerDeveloper(api *gin.RouterGroup, limiter gin.HandlerFun
 			respond(c, nil, err)
 			return
 		}
+		audit.Describe(c, audit.Detail{TargetType: "oauth_client", TargetID: app.ID, Changes: appChanges(nil, &app)})
 		// 明文密钥只在这一个响应里出现：库里只有 bcrypt 哈希，之后无处可取。
 		respond(c, gin.H{"app": app, "client_secret": secret}, nil)
 	})
@@ -88,7 +90,11 @@ func (h *Handler) registerDeveloper(api *gin.RouterGroup, limiter gin.HandlerFun
 		if !body(c, &in) {
 			return
 		}
+		before, _ := s.GetDeveloperApp(c.Request.Context(), c.Param("id"), currentUser(c))
 		app, err := s.UpdateDeveloperApp(c.Request.Context(), c.Param("id"), in, currentUser(c))
+		if err == nil {
+			audit.Describe(c, audit.Detail{TargetType: "oauth_client", TargetID: app.ID, Changes: appChanges(before, &app)})
+		}
 		respond(c, gin.H{"app": app}, err)
 	})
 	group.POST("/apps/:id/rotate-secret", limiter, authed, func(c *gin.Context) {
@@ -97,10 +103,16 @@ func (h *Handler) registerDeveloper(api *gin.RouterGroup, limiter gin.HandlerFun
 			respond(c, nil, err)
 			return
 		}
+		// 轮换只记"发生了一次轮换"：新旧密钥都不进审计。
+		audit.Describe(c, audit.Detail{TargetType: "oauth_client", TargetID: app.ID,
+			Changes: map[string]any{"secret_rotated": true, "client_id": app.ID}})
 		respond(c, gin.H{"app": app, "client_secret": secret}, nil)
 	})
 	group.DELETE("/apps/:id", authed, func(c *gin.Context) {
-		respond(c, gin.H{"ok": true}, s.DeleteDeveloperApp(c.Request.Context(), c.Param("id"), currentUser(c)))
+		before, _ := s.GetDeveloperApp(c.Request.Context(), c.Param("id"), currentUser(c))
+		err := s.DeleteDeveloperApp(c.Request.Context(), c.Param("id"), currentUser(c))
+		audit.Describe(c, audit.Detail{TargetType: "oauth_client", TargetID: c.Param("id"), Changes: appChanges(before, nil)})
+		respond(c, gin.H{"ok": true}, err)
 	})
 }
 

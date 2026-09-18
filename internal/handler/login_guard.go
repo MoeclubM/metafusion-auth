@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/MoeclubM/metafusion-auth/internal/audit"
 )
 
 // 登录失败凭据防护。层次关系是这次改动的前提，改这里之前先读完这段：
@@ -266,6 +268,7 @@ func (h *Handler) loginGuardMiddleware() gin.HandlerFunc {
 		blocked, retryAfter, delay := guard.check(keys, ip)
 		if blocked {
 			c.Header("Retry-After", strconv.Itoa(int(retryAfter.Seconds())))
+			audit.Fail(c, loginGuardErrorCode)
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": loginGuardErrorCode})
 			return
 		}

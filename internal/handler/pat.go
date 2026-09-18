@@ -19,6 +19,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/MoeclubM/metafusion-auth/internal/audit"
 	"github.com/MoeclubM/metafusion-auth/internal/store"
 )
 
@@ -83,6 +84,7 @@ func (h *Handler) registerTokens(api *gin.RouterGroup, limiter gin.HandlerFunc) 
 		// 0 或缺字段 = 永不过期（expires_at 留空）；负数/超上限一律拒绝，
 		// 免得"填 -1 以为是永不过期"这类歧义悄悄落库。
 		if in.ExpiresInDays < 0 || in.ExpiresInDays > maxPATExpiryDays {
+			audit.Fail(c, "invalid_expiry")
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_expiry"})
 			return
 		}
@@ -95,12 +97,18 @@ func (h *Handler) registerTokens(api *gin.RouterGroup, limiter gin.HandlerFunc) 
 			respond(c, nil, err)
 			return
 		}
+		// 明文令牌只出现在响应里（库里只有哈希）：审计只记前缀与元数据，绝不记明文。
+		audit.Describe(c, audit.Detail{TargetType: "pat", TargetID: item.ID, Changes: map[string]any{
+			"name": item.Name, "token_prefix": item.TokenPrefix, "scopes": item.Scopes,
+			"expires_in_days": in.ExpiresInDays}})
 		c.JSON(http.StatusCreated, gin.H{"token": plain, "item": item})
 	})
 
 	// 吊销：只写 revoked_at，幂等（已经吊销过再删仍然 200）。生效窗口见内省注释。
 	api.DELETE("/auth/tokens/:id", limiter, authed, func(c *gin.Context) {
-		respond(c, gin.H{"ok": true}, s.RevokePersonalAccessToken(c.Request.Context(), currentUser(c).ID, c.Param("id")))
+		err := s.RevokePersonalAccessToken(c.Request.Context(), currentUser(c).ID, c.Param("id"))
+		audit.Describe(c, audit.Detail{TargetType: "pat", TargetID: c.Param("id")})
+		respond(c, gin.H{"ok": true}, err)
 	})
 
 	// 内省：无凭据、无 Cookie、无状态写入。限流按"来源 IP"与"令牌哈希"双维度，

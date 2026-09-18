@@ -22,6 +22,7 @@ var frozenRoutes = []string{
 	"GET /.well-known/jwks.json",
 	"GET /.well-known/openid-configuration",
 	"GET /api/.well-known/openid-configuration",
+	"GET /api/admin/audit-logs",
 	"GET /api/admin/groups",
 	"GET /api/admin/invites",
 	"GET /api/admin/oauth/audits",

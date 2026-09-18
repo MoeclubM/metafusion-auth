@@ -25,6 +25,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/lib/pq"
 
+	"github.com/MoeclubM/metafusion-auth/internal/audit"
 	"github.com/MoeclubM/metafusion-auth/internal/store"
 )
 
@@ -44,10 +45,14 @@ type Handler struct {
 	// loginGuardFactory 生产登录失败保护计数器：生产为 newLoginGuard（每个 Register 一份，
 	// 状态随引擎存活），用例据此换成假时钟实例来断言窗口与递增延迟。
 	loginGuardFactory func() *loginGuard
+	// audit 是审计写入器（写跨服务共用的 audit.audit_log，见 internal/audit 与
+	// docs/architecture/audit-log.md）。为 nil 时审计中间件退化为空操作。
+	audit *audit.Recorder
 }
 
 func New(s *store.Store) *Handler {
-	return &Handler{store: s, oauth: s, developer: s, tokens: s, loginGuardFactory: newLoginGuard}
+	return &Handler{store: s, oauth: s, developer: s, tokens: s, loginGuardFactory: newLoginGuard,
+		audit: audit.NewRecorder(s.DB, audit.ServiceName)}
 }
 
 // Register 挂载全部路由。限流沿用主仓库的口径：只对认证写入类接口按 IP 固定窗口限流，
@@ -57,6 +62,9 @@ func (h *Handler) Register(r *gin.Engine) {
 	limiter := h.rateLimiter()
 	api := r.Group("/api")
 	api.Use(h.identity())
+	// 审计中间件必须挂在任何路由注册之前：gin 的 RouterGroup.Use 只对之后注册的路由生效
+	// （注册时把当时的 handler 链复制进路由表）。
+	api.Use(h.auditMiddleware())
 	h.registerAuth(api, limiter)
 	h.registerOAuth(api, limiter)
 	h.registerDeveloper(api, limiter)
@@ -64,6 +72,8 @@ func (h *Handler) Register(r *gin.Engine) {
 	h.registerTokens(api, limiter)
 	// 公开账号资料 GET /users/:id（匿名可读，email 仅本人可见）。
 	h.registerPublicUsers(api)
+	// 审计读取面 GET /admin/audit-logs（跨服务审计的唯一读取端点）。
+	h.registerAudit(api)
 
 	// OIDC 标准路径：
 	//   /.well-known/openid-configuration、/.well-known/jwks.json
@@ -88,6 +98,12 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 			return
 		}
 		u, err := s.CreateUser(c.Request.Context(), in.Username, in.Email, in.Password, true, nil)
+		if err == nil {
+			// 首个管理员此时还没有会话（不签发令牌），凭据类型按 anonymous 记，靠 changes.via 区分入口。
+			audit.SetActor(c, audit.Actor{UserID: u.ID, Username: u.Username, CredentialType: audit.CredentialAnonymous})
+			audit.Describe(c, audit.Detail{TargetType: "user", TargetID: u.ID, Changes: map[string]any{
+				"username": u.Username, "email": in.Email, "role": u.Role, "via": "setup"}})
+		}
 		respond(c, u, err)
 	})
 	// 登录失败保护：先过按 IP 的请求速率层（limiter），再过按账号+IP 的失败凭据层
@@ -104,6 +120,15 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		token, u, err := s.Login(c.Request.Context(), in.Username, in.Password)
 		if err == nil {
 			setSessionCookie(c, token, 86400)
+			// 登录成功后操作者就是登录者本人；用会话令牌继续操作，凭据类型 session。
+			audit.SetActor(c, audit.Actor{UserID: u.ID, Username: u.Username, CredentialType: audit.CredentialSession})
+			audit.Describe(c, audit.Detail{TargetType: "user", TargetID: u.ID})
+		} else {
+			// 失败也要留痕（撞库/爆破的取证面）。attempted_username 若填的是邮箱，
+			// 会被 audit 包的邮箱遮罩兜住；口令永远不进 changes。
+			audit.SetAction(c, "session.login_failed")
+			audit.Describe(c, audit.Detail{TargetType: "account", Changes: map[string]any{
+				"attempted_username": in.Username, "via": "password"}})
 		}
 		respond(c, gin.H{"token": token, "access_token": token, "token_type": "Bearer", "expires_in": int(store.AccessTokenTTL.Seconds()), "user": u}, err)
 	})
@@ -123,7 +148,11 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 	api.POST("/auth/logout", requireUser(), func(c *gin.Context) {
 		token := tokenFromRequest(c)
 		clearSessionCookie(c)
-		respond(c, gin.H{"ok": true}, s.Logout(c.Request.Context(), token))
+		err := s.Logout(c.Request.Context(), token)
+		if u := currentUser(c); u != nil {
+			audit.Describe(c, audit.Detail{TargetType: "user", TargetID: u.ID})
+		}
+		respond(c, gin.H{"ok": true}, err)
 	})
 
 	// GET /auth/settings 供未登录页面读取实例准入能力：值为**实例设置的持久化结果**
@@ -150,6 +179,13 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		u, token, err := s.Register(c.Request.Context(), in.Username, in.Email, in.Password, in.InviteCode)
 		if err == nil && token != "" {
 			setSessionCookie(c, token, 86400)
+		}
+		if err == nil {
+			audit.SetActor(c, audit.Actor{UserID: u.ID, Username: u.Username, CredentialType: audit.CredentialSession})
+			// 邀请码是准凭据：只记掩码后的前 4 位（契约 §4）。
+			audit.Describe(c, audit.Detail{TargetType: "user", TargetID: u.ID, Changes: map[string]any{
+				"username": u.Username, "email": in.Email, "role": u.Role,
+				"invite_code": audit.MaskSecret(in.InviteCode)}})
 		}
 		respond(c, gin.H{"token": token, "access_token": token, "token_type": "Bearer", "expires_in": int(store.AccessTokenTTL.Seconds()), "user": u}, err)
 	})
@@ -183,6 +219,11 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 			ttl = time.Duration(in.ExpiresInDays) * 24 * time.Hour
 		}
 		inv, err := s.CreateInvite(c.Request.Context(), in.Note, in.MaxUses, ttl, currentUser(c))
+		if err == nil {
+			audit.Describe(c, audit.Detail{TargetType: "invite", TargetID: audit.MaskSecret(inv.Code),
+				Changes: map[string]any{"code": audit.MaskSecret(inv.Code), "max_uses": in.MaxUses,
+					"expires_in_days": in.ExpiresInDays}})
+		}
 		respond(c, inv, err)
 	})
 
@@ -196,7 +237,14 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		if !body(c, &in) {
 			return
 		}
-		respond(c, gin.H{"ok": true}, s.UpdateSettings(c.Request.Context(), in, currentUser(c)))
+		before, _ := s.Settings(c.Request.Context())
+		err := s.UpdateSettings(c.Request.Context(), in, currentUser(c))
+		if err == nil {
+			after, _ := s.Settings(c.Request.Context())
+			audit.Describe(c, audit.Detail{TargetType: "instance_settings", TargetID: "instance",
+				Changes: settingsChanges(before, after, in)})
+		}
+		respond(c, gin.H{"ok": true}, err)
 	})
 
 	// ── 管理台：邀请码 ──
@@ -218,10 +266,18 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 			ttl = time.Duration(in.ExpiresInDays) * 24 * time.Hour
 		}
 		inv, err := s.CreateInvite(c.Request.Context(), in.Note, in.MaxUses, ttl, currentUser(c))
+		if err == nil {
+			audit.Describe(c, audit.Detail{TargetType: "invite", TargetID: audit.MaskSecret(inv.Code),
+				Changes: map[string]any{"code": audit.MaskSecret(inv.Code), "max_uses": in.MaxUses,
+					"expires_in_days": in.ExpiresInDays}})
+		}
 		respond(c, inv, err)
 	})
 	api.POST("/admin/invites/:code/revoke", requirePermission("auth.invites.manage"), func(c *gin.Context) {
-		respond(c, gin.H{"ok": true}, s.RevokeInvite(c.Request.Context(), c.Param("code"), currentUser(c)))
+		masked := audit.MaskSecret(c.Param("code"))
+		err := s.RevokeInvite(c.Request.Context(), c.Param("code"), currentUser(c))
+		audit.Describe(c, audit.Detail{TargetType: "invite", TargetID: masked, Changes: map[string]any{"code": masked}})
+		respond(c, gin.H{"ok": true}, err)
 	})
 
 	// ── 管理台：权限组与成员分配 ──
@@ -238,6 +294,9 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 			return
 		}
 		g, err := s.CreateGroup(c.Request.Context(), in, currentUser(c))
+		if err == nil {
+			audit.Describe(c, audit.Detail{TargetType: "group", TargetID: g.Code, Changes: groupChanges(nil, &g)})
+		}
 		respond(c, g, err)
 	})
 	api.PUT("/admin/groups/:code", requirePermission("auth.groups.manage"), func(c *gin.Context) {
@@ -245,11 +304,18 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		if !body(c, &in) {
 			return
 		}
+		before, _ := s.AuditGroupSnapshot(c.Request.Context(), c.Param("code"))
 		g, err := s.UpdateGroup(c.Request.Context(), c.Param("code"), in, currentUser(c))
+		if err == nil {
+			audit.Describe(c, audit.Detail{TargetType: "group", TargetID: g.Code, Changes: groupChanges(before, &g)})
+		}
 		respond(c, g, err)
 	})
 	api.DELETE("/admin/groups/:code", requirePermission("auth.groups.manage"), func(c *gin.Context) {
-		respond(c, gin.H{"ok": true}, s.DeleteGroup(c.Request.Context(), c.Param("code"), currentUser(c)))
+		before, _ := s.AuditGroupSnapshot(c.Request.Context(), c.Param("code"))
+		err := s.DeleteGroup(c.Request.Context(), c.Param("code"), currentUser(c))
+		audit.Describe(c, audit.Detail{TargetType: "group", TargetID: c.Param("code"), Changes: groupChanges(before, nil)})
+		respond(c, gin.H{"ok": true}, err)
 	})
 	api.PUT("/admin/users/:id/groups", requirePermission("auth.users.manage"), func(c *gin.Context) {
 		var in struct {
@@ -258,7 +324,15 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		if !body(c, &in) {
 			return
 		}
-		respond(c, gin.H{"ok": true}, s.SetUserGroups(c.Request.Context(), c.Param("id"), in.Groups, currentUser(c)))
+		before, _ := s.AuditUserSnapshot(c.Request.Context(), c.Param("id"))
+		err := s.SetUserGroups(c.Request.Context(), c.Param("id"), in.Groups, currentUser(c))
+		if err == nil {
+			// auditUserChanges 已带 before 的 groups；这里只补 after，避免同一语义写两遍。
+			changes := auditUserChanges(before)
+			changes["after_groups"] = in.Groups
+			audit.Describe(c, audit.Detail{TargetType: "user", TargetID: c.Param("id"), Changes: changes})
+		}
+		respond(c, gin.H{"ok": true}, err)
 	})
 
 	// 改自己的密码只有这一条入口（前端设置页也只调它），参数是 old_password/new_password。
@@ -275,7 +349,12 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		if !body(c, &in) {
 			return
 		}
-		respond(c, gin.H{"ok": true}, s.ChangePassword(c.Request.Context(), u.ID, in.OldPassword, in.NewPassword))
+		err := s.ChangePassword(c.Request.Context(), u.ID, in.OldPassword, in.NewPassword)
+		if err == nil {
+			// 新旧口令都不进审计（它们是凭据本身），只记"谁在什么时候改了自己的口令"。
+			audit.Describe(c, audit.Detail{TargetType: "user", TargetID: u.ID, Changes: map[string]any{"password_changed": true, "self_service": true}})
+		}
+		respond(c, gin.H{"ok": true}, err)
 	}
 	api.PUT("/auth/password", requireUser(), changePassword)
 
@@ -286,7 +365,9 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 			return
 		}
 		clearSessionCookie(c)
-		respond(c, gin.H{"ok": true}, s.LogoutAll(c.Request.Context(), u.ID))
+		err := s.LogoutAll(c.Request.Context(), u.ID)
+		audit.Describe(c, audit.Detail{TargetType: "user", TargetID: u.ID, Changes: map[string]any{"self_service": true}})
+		respond(c, gin.H{"ok": true}, err)
 	})
 
 	// 用户自助管理自己的第三方授权（设置页的"已授权应用"）。
@@ -307,7 +388,12 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication_required"})
 			return
 		}
-		n, err := s.RevokeOwnOAuthGrant(c.Request.Context(), u.ID, c.Param("client_id"))
+		clientID := c.Param("client_id")
+		n, err := s.RevokeOwnOAuthGrant(c.Request.Context(), u.ID, clientID)
+		if err == nil {
+			audit.Describe(c, audit.Detail{TargetType: "oauth_client", TargetID: clientID,
+				Changes: map[string]any{"revoked": n, "self_service": true}})
+		}
 		// 幂等：本来就没有有效令牌时 revoked=0 仍回 ok——用户点"移除"要的是结果状态。
 		respond(c, gin.H{"ok": true, "revoked": n}, err)
 	})
@@ -326,6 +412,10 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 			return
 		}
 		u, err := s.CreateUser(c.Request.Context(), in.Username, in.Email, in.Password, false, currentUser(c))
+		if err == nil {
+			audit.Describe(c, audit.Detail{TargetType: "user", TargetID: u.ID, Changes: map[string]any{
+				"username": u.Username, "email": in.Email, "role": u.Role, "via": "admin"}})
+		}
 		respond(c, u, err)
 	})
 	api.PUT("/admin/users/:id/role", requirePermission("auth.users.manage"), func(c *gin.Context) {
@@ -335,7 +425,14 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		if !body(c, &in) {
 			return
 		}
-		respond(c, gin.H{"ok": true}, s.UpdateUserRole(c.Request.Context(), c.Param("id"), in.Role, currentUser(c)))
+		before, _ := s.AuditUserSnapshot(c.Request.Context(), c.Param("id"))
+		err := s.UpdateUserRole(c.Request.Context(), c.Param("id"), in.Role, currentUser(c))
+		if err == nil {
+			changes := auditUserChanges(before)
+			changes["after_role"] = in.Role
+			audit.Describe(c, audit.Detail{TargetType: "user", TargetID: c.Param("id"), Changes: changes})
+		}
+		respond(c, gin.H{"ok": true}, err)
 	})
 	api.PUT("/admin/users/:id/password", requirePermission("auth.users.manage"), func(c *gin.Context) {
 		var in struct {
@@ -344,7 +441,14 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		if !body(c, &in) {
 			return
 		}
-		respond(c, gin.H{"ok": true}, s.ResetUserPassword(c.Request.Context(), c.Param("id"), in.Password, currentUser(c)))
+		before, _ := s.AuditUserSnapshot(c.Request.Context(), c.Param("id"))
+		err := s.ResetUserPassword(c.Request.Context(), c.Param("id"), in.Password, currentUser(c))
+		if err == nil {
+			// 只记"发生了一次重置"与对象：新旧口令一个字都不进 changes。
+			audit.Describe(c, audit.Detail{TargetType: "user", TargetID: c.Param("id"), Changes: map[string]any{
+				"password_reset": true, "target_username": usernameOf(before)}})
+		}
+		respond(c, gin.H{"ok": true}, err)
 	})
 
 	// PUT /admin/users/:id/ban 封禁或解封账号（body {banned: bool}）。
@@ -359,14 +463,27 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		}
 		if in.Banned == nil {
 			// 缺字段按非法载荷拒绝：把"没传"当成解封，会让一次误请求悄悄放人进来。
+			audit.Fail(c, "invalid_payload")
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_payload"})
 			return
 		}
+		before, _ := s.AuditUserSnapshot(c.Request.Context(), c.Param("id"))
 		u, err := s.SetUserBanned(c.Request.Context(), c.Param("id"), *in.Banned, currentUser(c))
 		if err != nil {
 			respond(c, nil, err)
 			return
 		}
+		// 封禁与解封是同一路由的两种语义：动作码按请求体分流，查"谁被封过"时不用看 changes。
+		if *in.Banned {
+			audit.SetAction(c, "user.banned")
+		} else {
+			audit.SetAction(c, "user.unbanned")
+		}
+		changes := map[string]any{"after_banned": *in.Banned, "target_username": usernameOf(before)}
+		if before != nil {
+			changes["before_banned"] = before.Banned
+		}
+		audit.Describe(c, audit.Detail{TargetType: "user", TargetID: c.Param("id"), Changes: changes})
 		respond(c, gin.H{"ok": true, "user": u}, nil)
 	})
 }
@@ -410,6 +527,7 @@ func requireUser() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		u := currentUser(c)
 		if u == nil {
+			audit.Fail(c, "authentication_required")
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication_required"})
 			return
 		}
@@ -424,10 +542,12 @@ func requirePermission(code string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		u := currentUser(c)
 		if u == nil {
+			audit.Fail(c, "authentication_required")
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication_required"})
 			return
 		}
 		if !store.Can(u, code) {
+			audit.Fail(c, "forbidden")
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden", "required_permission": code})
 			return
 		}
@@ -475,6 +595,7 @@ func body(c *gin.Context, v any) bool {
 	dec := json.NewDecoder(c.Request.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
+		audit.Fail(c, "invalid_payload")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_payload"})
 		return false
 	}
@@ -497,6 +618,7 @@ func respond(c *gin.Context, v any, err error) {
 	var pg *pq.Error
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
+		audit.Fail(c, "not_found")
 		c.JSON(http.StatusNotFound, gin.H{"error": "not_found"})
 	case errors.As(err, &pg):
 		status, code := postgresErrorResponse(pg)
@@ -505,11 +627,14 @@ func respond(c *gin.Context, v any, err error) {
 			slog.Error("账号服务：数据库错误", "sqlstate", string(pg.Code), "constraint", pg.Constraint,
 				"detail", pg.Detail, "err", err.Error())
 		}
+		audit.Fail(c, code)
 		c.JSON(status, gin.H{"error": code})
 	case internalFailure(err):
 		slog.Error("账号服务：未登记的错误（原文不外发）", "err", err.Error())
+		audit.Fail(c, codeInternalError)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": codeInternalError})
 	default:
+		audit.Fail(c, err.Error())
 		c.JSON(authStatusFor(err.Error()), gin.H{"error": err.Error()})
 	}
 }
@@ -660,6 +785,7 @@ func (h *Handler) rateLimiter() gin.HandlerFunc {
 		b.mu.Unlock()
 		if over {
 			c.Header("Retry-After", fmt.Sprintf("%d", int(window.Seconds())))
+			audit.Fail(c, "rate_limited")
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "rate_limited"})
 			return
 		}
