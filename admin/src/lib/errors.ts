@@ -85,6 +85,19 @@ export const INVITE_ERROR_KEYS: Record<string, string> = {
   forbidden: "invites.err.forbidden",
 };
 
+/**
+ * 实例设置的稳定错误码表（store/access.go 的 UpdateSettings）。
+ *
+ * 它只报两类失败：键/值不合法（invalid_setting、invalid_group_code）与载荷非法；
+ * 403（缺 auth.settings.manage）由 describeApiError 统一说清要哪个码。
+ */
+export const SETTINGS_ERROR_KEYS: Record<string, string> = {
+  invalid_setting: "instance.err.invalidSetting",
+  invalid_group_code: "instance.err.invalidGroupCode",
+  invalid_payload: "instance.err.invalidPayload",
+  forbidden: "instance.err.forbidden",
+};
+
 /** OAuth 客户端管理的稳定错误码表（store/oauth.go）。 */
 export const OAUTH_ERROR_KEYS: Record<string, string> = {
   client_not_found: "oauth.err.clientNotFound",

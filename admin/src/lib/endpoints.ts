@@ -238,10 +238,18 @@ export function revokeAdminInvite(code: string): Promise<{ ok: boolean }> {
   return sendJson<{ ok: boolean }>(`/api/admin/invites/${encodeURIComponent(code)}/revoke`, "POST");
 }
 
-// ── 实例设置（只读页用） ──
+// ── 实例设置 ──
 
 export function fetchAdminSettings(): Promise<SettingsMap> {
   return getJson<SettingsMap>("/api/admin/settings");
+}
+
+/**
+ * 写实例设置：服务端是**补丁**语义（store.UpdateSettings 只认接受表里的键，
+ * 未知键回 invalid_setting），所以只提交改动过的键，不整份覆盖。
+ */
+export function updateAdminSettings(patch: SettingsMap): Promise<{ ok: boolean }> {
+  return sendJson<{ ok: boolean }>("/api/admin/settings", "PUT", patch);
 }
 
 // ── OAuth 客户端 ──
