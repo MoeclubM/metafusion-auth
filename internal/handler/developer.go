@@ -11,6 +11,7 @@ package handler
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -28,6 +29,7 @@ type developerStore interface {
 	UpdateDeveloperApp(ctx context.Context, id string, in store.DeveloperAppInput, actor *store.User) (store.DeveloperApp, error)
 	RotateDeveloperAppSecret(ctx context.Context, id string, actor *store.User) (store.DeveloperApp, string, error)
 	DeleteDeveloperApp(ctx context.Context, id string, actor *store.User) error
+	ListOwnAppAudits(ctx context.Context, ownerID, clientID string, limit int) ([]store.OwnAppAuditEntry, error)
 }
 
 // 生产实现必须是 *store.Store：接口与实现一旦对不上，这里先编译失败。
@@ -107,6 +109,13 @@ func (h *Handler) registerDeveloper(api *gin.RouterGroup, limiter gin.HandlerFun
 		audit.Describe(c, audit.Detail{TargetType: "oauth_client", TargetID: app.ID,
 			Changes: map[string]any{"secret_rotated": true, "client_id": app.ID}})
 		respond(c, gin.H{"app": app, "client_secret": secret}, nil)
+	})
+	// audit-logs 只回本人应用的审计：归属在 SQL 里按 owner_user_id 过滤；
+	// client_id 可选过滤，不是自己的应用直接回空列表而不 404。
+	group.GET("/audit-logs", authed, func(c *gin.Context) {
+		limit, _ := strconv.Atoi(c.Query("limit"))
+		items, err := s.ListOwnAppAudits(c.Request.Context(), currentUser(c).ID, c.Query("client_id"), limit)
+		respond(c, gin.H{"items": items}, err)
 	})
 	group.DELETE("/apps/:id", authed, func(c *gin.Context) {
 		before, _ := s.GetDeveloperApp(c.Request.Context(), c.Param("id"), currentUser(c))

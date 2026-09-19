@@ -132,7 +132,8 @@ func (h *Handler) registerTokens(api *gin.RouterGroup, limiter gin.HandlerFunc) 
 			// 结果里含身份与权限，代理/浏览器缓存都会让"吊销后仍在用"的窗口变长。
 			c.Header("Cache-Control", "no-store")
 			c.JSON(http.StatusOK, gin.H{
-				"valid": true, "user_id": p.UserID, "username": p.Username, "role": p.Role,
+				"valid": true, "token_id": p.TokenID, "token_name": p.TokenName,
+				"user_id": p.UserID, "username": p.Username, "role": p.Role,
 				"permissions": p.Permissions, "scopes": p.Scopes,
 				"token_prefix": p.TokenPrefix, "expires_at": p.ExpiresAt,
 			})

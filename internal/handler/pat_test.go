@@ -202,6 +202,7 @@ func TestTokenCreateReturnsPlaintextWithoutHash(t *testing.T) {
 
 func TestTokenIntrospectReturnsPrincipal(t *testing.T) {
 	principal := &store.PATPrincipal{
+		TokenID: testPATID, TokenName: "CI 编目",
 		UserID: "77777777-7777-7777-7777-777777777777", Username: "member", Role: "user",
 		Permissions: []string{"catalog.entity.edit"}, Scopes: []string{"catalog.entity.edit"},
 		TokenPrefix: testPATPlain[:12],
@@ -213,6 +214,8 @@ func TestTokenIntrospectReturnsPrincipal(t *testing.T) {
 	}
 	var got struct {
 		Valid       bool       `json:"valid"`
+		TokenID     string     `json:"token_id"`
+		TokenName   string     `json:"token_name"`
 		UserID      string     `json:"user_id"`
 		Username    string     `json:"username"`
 		Role        string     `json:"role"`
@@ -224,6 +227,9 @@ func TestTokenIntrospectReturnsPrincipal(t *testing.T) {
 	decodeInto(t, w, &got)
 	if !got.Valid || got.UserID != principal.UserID || got.Username != principal.Username || got.Role != principal.Role {
 		t.Fatalf("内省身份不符：%+v", got)
+	}
+	if got.TokenID != testPATID || got.TokenName != "CI 编目" {
+		t.Fatalf("内省应回令牌身份 token_id/token_name：%+v", got)
 	}
 	if len(got.Permissions) != 1 || got.Permissions[0] != "catalog.entity.edit" || got.TokenPrefix != principal.TokenPrefix {
 		t.Fatalf("内省权限/前缀不符：%+v", got)

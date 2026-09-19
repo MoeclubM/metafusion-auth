@@ -173,6 +173,9 @@ func TestPersonalAccessTokensAgainstPostgres(t *testing.T) {
 	if !reflect.DeepEqual(p.Scopes, []string{"catalog.entity.edit"}) || p.TokenPrefix != item.TokenPrefix || p.ExpiresAt != nil {
 		t.Fatalf("内省元数据不符: %+v", p)
 	}
+	if p.TokenID != item.ID || p.TokenName != "CI 编目" {
+		t.Fatalf("内省应回令牌身份 token_id/token_name: %+v", p)
+	}
 	_, firstUsed, _ := patRowTimes(t, ctx, s, item.ID)
 	if !firstUsed.Valid {
 		t.Fatal("首次内省应写入 last_used_at")

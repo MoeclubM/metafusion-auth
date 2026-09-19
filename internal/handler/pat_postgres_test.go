@@ -110,6 +110,8 @@ func TestPersonalAccessTokenHTTPAgainstPostgres(t *testing.T) {
 	}
 	var principal struct {
 		Valid       bool       `json:"valid"`
+		TokenID     string     `json:"token_id"`
+		TokenName   string     `json:"token_name"`
 		UserID      string     `json:"user_id"`
 		Username    string     `json:"username"`
 		Role        string     `json:"role"`
@@ -121,6 +123,9 @@ func TestPersonalAccessTokenHTTPAgainstPostgres(t *testing.T) {
 	decodeInto(t, w, &principal)
 	if !principal.Valid || principal.UserID != memberID || principal.Username != memberName || principal.Role != "user" {
 		t.Fatalf("内省身份不符: %+v", principal)
+	}
+	if principal.TokenID != created.Item.ID || principal.TokenName != "CI 编目" {
+		t.Fatalf("内省应回令牌身份 token_id/token_name: %+v", principal)
 	}
 	if len(principal.Permissions) != 1 || principal.Permissions[0] != "catalog.entity.edit" || len(principal.Scopes) != 1 {
 		t.Fatalf("有效权限应是账号权限 ∩ scopes: %+v", principal)

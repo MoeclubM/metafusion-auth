@@ -84,10 +84,14 @@ func (t PersonalAccessToken) activeAt(now time.Time) bool {
 }
 
 // PATPrincipal 是内省的答案：下游据此构造调用者身份。
+// TokenID/TokenName 让下游能区分"同一账号的哪一张令牌在调用"（按前缀只能认出大概，
+// 按 id/name 才能落审计与限流；明文与哈希都不下发）。
 type PATPrincipal struct {
-	UserID   string `json:"user_id"`
-	Username string `json:"username"`
-	Role     string `json:"role"`
+	TokenID   string `json:"token_id"`
+	TokenName string `json:"token_name"`
+	UserID    string `json:"user_id"`
+	Username  string `json:"username"`
+	Role      string `json:"role"`
 	// Permissions 是**有效权限**：账号现时权限 ∩ 该 PAT 的 scopes。创建时 scopes 至少一项，
 	// 但账号权限被收回后交集可能为空（空数组）——那正是最危险的一格：
 	// 下游必须以它为准，且只能用 HasPermission(perms, code) 语义；
@@ -325,16 +329,18 @@ func (s *Store) IntrospectPersonalAccessToken(ctx context.Context, token string)
 	}
 	hash := HashPersonalAccessToken(token)
 	var (
-		userID   string
-		username string
-		role     string
-		scopes   []string
-		expires  sql.NullTime
+		tokenID   string
+		tokenName string
+		userID    string
+		username  string
+		role      string
+		scopes    []string
+		expires   sql.NullTime
 	)
-	err := s.DB.QueryRowContext(ctx, "SELECT t.user_id,u.username,u.role,t.scopes,t.expires_at"+
+	err := s.DB.QueryRowContext(ctx, "SELECT t.id,t.name,t.user_id,u.username,u.role,t.scopes,t.expires_at"+
 		" FROM auth.personal_access_tokens t JOIN auth.users u ON u.id=t.user_id"+
 		" WHERE t.token_hash=$1 AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at>now()) AND NOT u.banned",
-		hash).Scan(&userID, &username, &role, pq.Array(&scopes), &expires)
+		hash).Scan(&tokenID, &tokenName, &userID, &username, &role, pq.Array(&scopes), &expires)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// 不存在 / 已吊销 / 已过期 / 账号被封：对外只有一种答案。
@@ -349,6 +355,7 @@ func (s *Store) IntrospectPersonalAccessToken(ctx context.Context, token string)
 		return nil, err
 	}
 	p := &PATPrincipal{
+		TokenID: tokenID, TokenName: tokenName,
 		UserID: userID, Username: username, Role: role,
 		Permissions: EffectivePATPermissions(&u, scopes),
 		Scopes:      scopes, TokenPrefix: patPrefixOf(token),

@@ -214,6 +214,46 @@ func (f *fakeOAuth) DeleteDeveloperApp(ctx context.Context, id string, actor *st
 	return nil
 }
 
+func (f *fakeOAuth) ListOwnAppAudits(ctx context.Context, ownerID, clientID string, limit int) ([]store.OwnAppAuditEntry, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ownerID = strings.TrimSpace(ownerID)
+	if ownerID == "" {
+		return nil, fmt.Errorf("authentication_required")
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	out := []store.OwnAppAuditEntry{}
+	for i := len(f.audits) - 1; i >= 0; i-- {
+		e := f.audits[i]
+		if cid := strings.TrimSpace(clientID); cid != "" && e.ClientID != cid {
+			continue
+		}
+		if f.owners[e.ClientID] != ownerID {
+			continue
+		}
+		item := store.OwnAppAuditEntry{
+			ID: e.ID, ActorID: e.ActorID, SubjectID: e.SubjectID,
+			ClientID: e.ClientID, Action: e.Action, Scopes: e.Scopes,
+			Detail: e.Detail, CreatedAt: e.CreatedAt,
+		}
+		if c, ok := f.clients[e.ClientID]; ok {
+			item.ClientName = c.Name
+		}
+		if u, ok := f.users[e.ActorID]; ok {
+			item.Actor = u.Username
+		} else {
+			item.Actor = e.Actor
+		}
+		out = append(out, item)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 // markVerified 是测试夹具：把某个客户端标成"已核验"（真实实现里这一步由管理员在管理台做，
 // 走 PUT /api/admin/oauth/clients/{id} 的 verified 字段）。
 func (f *fakeOAuth) markVerified(id string) {
