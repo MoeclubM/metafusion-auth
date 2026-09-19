@@ -20,10 +20,13 @@ import (
 // 两者随 /auth/me 与访问令牌下发，各子系统据此判定自己的能力；role 是历史兼容字段
 // （admin/editor/user），由组成员关系推导，保留给尚未接入权限码的旧代码。
 type User struct {
-	ID          string   `json:"id"`
-	Username    string   `json:"username"`
-	Email       string   `json:"email"`
-	Role        string   `json:"role"`
+	ID       string `json:"id"`
+	Username string `json:"username"`
+	Email    string `json:"email"`
+	Role     string `json:"role"`
+	// 昵称与简介：空串=未设置（前端回退用户名/占位），omitempty 保持既有载荷形状。
+	DisplayName string   `json:"display_name,omitempty"`
+	Bio         string   `json:"bio,omitempty"`
 	Groups      []string `json:"groups,omitempty"`
 	Permissions []string `json:"permissions,omitempty"`
 	// Banned 只在为真时下发：既有客户端的载荷形状保持不变（omitempty），
@@ -60,6 +63,10 @@ ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS email text NOT NULL DEFAULT '';
 -- 账号封禁：被封禁的账号不能登录，已有服务端会话与第三方令牌立即失效（登录/续期/验签三处都拒）。
 -- 默认 false，既保证既有实例升级后行为不变，也让"读到空值"不会变成放行。
 ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS banned boolean NOT NULL DEFAULT false;
+-- 自助资料：昵称与个人简介。默认空串=未设置（前端回退用户名/占位）；公开读出，
+-- 写只走本人自助接口（PUT /api/auth/profile），不经过管理台。
+ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS display_name text NOT NULL DEFAULT '';
+ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS bio text NOT NULL DEFAULT '';
 CREATE TABLE IF NOT EXISTS auth.sessions (
  token_hash text PRIMARY KEY, user_id uuid NOT NULL REFERENCES auth.users(id), expires_at timestamptz NOT NULL
 );

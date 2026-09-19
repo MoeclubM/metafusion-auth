@@ -181,3 +181,59 @@ func restoreSettings(t *testing.T, db *sql.DB, keys ...string) {
 		}
 	})
 }
+
+// 自助资料的真库回归：改昵称/简介后公开读与本人读都即时可见；空串=未设置；
+// 超限 400（昵称 32 / 简介 500 rune）；不存在的账号 404。
+// 未设置 AUTH_TEST_DSN 时跳过。
+func TestUpdateProfileAgainstPostgres(t *testing.T) {
+	ctx := context.Background()
+	db := testutil.Database(t)
+	s, err := Open(ctx, testutil.DSN(t))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	if err := s.Init(ctx); err != nil {
+		t.Fatalf("init schema: %v", err)
+	}
+	testutil.ResetAccounts(t, db)
+	t.Cleanup(func() { testutil.ResetAccounts(t, db) })
+	s.Tokens = newTestIssuer(t)
+
+	const pwd = "profile-update-secret-1"
+	admin, err := s.CreateUser(ctx, "profile-upd-admin", "", pwd, true, nil)
+	if err != nil {
+		t.Fatalf("建管理员: %v", err)
+	}
+	member, err := s.CreateUserWithRole(ctx, "profile-upd-member", "upd-member@example.test", pwd, false, "user", &admin)
+	if err != nil {
+		t.Fatalf("建成员: %v", err)
+	}
+
+	out, err := s.UpdateProfile(ctx, member.ID, "  阿策  ", "写简介\n第二行")
+	if err != nil {
+		t.Fatalf("改资料: %v", err)
+	}
+	if out.DisplayName != "阿策" || out.Bio != "写简介\n第二行" {
+		t.Fatalf("应 trim 后落库，实际 %+v", out)
+	}
+	// 公开读即时可见；本人读同样带出。
+	if p, err := s.PublicProfile(ctx, member.ID, ""); err != nil || p.User.DisplayName != "阿策" || p.User.Bio != "写简介\n第二行" {
+		t.Fatalf("公开读应即时可见（err=%v）：%+v", err, p.User)
+	}
+	// 清空回未设置。
+	if out, err = s.UpdateProfile(ctx, member.ID, "", ""); err != nil || out.DisplayName != "" || out.Bio != "" {
+		t.Fatalf("清空应回空串（err=%v）：%+v", err, out)
+	}
+	// 超限。
+	if _, err = s.UpdateProfile(ctx, member.ID, strings.Repeat("昵", 33), ""); err == nil || err.Error() != "invalid_display_name" {
+		t.Fatalf("昵称 33 字应 invalid_display_name，实际 %v", err)
+	}
+	if _, err = s.UpdateProfile(ctx, member.ID, "", strings.Repeat("b", 501)); err == nil || err.Error() != "invalid_bio" {
+		t.Fatalf("简介 501 字应 invalid_bio，实际 %v", err)
+	}
+	// 不存在的账号。
+	if _, err = s.UpdateProfile(ctx, uuid.NewString(), "x", ""); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("不存在的账号应 ErrNoRows，实际 %v", err)
+	}
+}

@@ -102,7 +102,7 @@ func (s *Store) Login(ctx context.Context, username, password string) (string, U
 	var u User
 	var stored string
 	var banned bool
-	err := s.DB.QueryRowContext(ctx, "SELECT id,username,COALESCE(email,''),role,password_hash,banned FROM auth.users WHERE username=$1 OR (email=$1 AND email<>'')", strings.TrimSpace(username)).Scan(&u.ID, &u.Username, &u.Email, &u.Role, &stored, &banned)
+	err := s.DB.QueryRowContext(ctx, "SELECT id,username,COALESCE(email,''),role,password_hash,banned,COALESCE(display_name,''),COALESCE(bio,'') FROM auth.users WHERE username=$1 OR (email=$1 AND email<>'')", strings.TrimSpace(username)).Scan(&u.ID, &u.Username, &u.Email, &u.Role, &stored, &banned, &u.DisplayName, &u.Bio)
 	if err != nil || bcrypt.CompareHashAndPassword([]byte(stored), []byte(password)) != nil {
 		return "", u, fmt.Errorf("invalid_credentials")
 	}
@@ -175,7 +175,7 @@ func (s *Store) Refresh(ctx context.Context, token string) (string, User, error)
 		return "", User{}, fmt.Errorf("invalid_token")
 	}
 	var fresh User
-	if ferr := s.DB.QueryRowContext(ctx, "SELECT id,username,COALESCE(email,''),role FROM auth.users WHERE id=$1", u.ID).Scan(&fresh.ID, &fresh.Username, &fresh.Email, &fresh.Role); ferr != nil {
+	if ferr := s.DB.QueryRowContext(ctx, "SELECT id,username,COALESCE(email,''),role,COALESCE(display_name,''),COALESCE(bio,'') FROM auth.users WHERE id=$1", u.ID).Scan(&fresh.ID, &fresh.Username, &fresh.Email, &fresh.Role, &fresh.DisplayName, &fresh.Bio); ferr != nil {
 		return "", User{}, fmt.Errorf("invalid_token")
 	}
 	u = &fresh
@@ -349,7 +349,7 @@ func (s *Store) SetUserBanned(ctx context.Context, targetUserID string, banned b
 }
 
 func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
-	rows, err := s.DB.QueryContext(ctx, "SELECT id, username, COALESCE(email,''), role, banned FROM auth.users ORDER BY username ASC")
+	rows, err := s.DB.QueryContext(ctx, "SELECT id, username, COALESCE(email,''), role, banned, COALESCE(display_name,''), COALESCE(bio,'') FROM auth.users ORDER BY username ASC")
 	if err != nil {
 		return nil, err
 	}
@@ -357,7 +357,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	var out []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.Role, &u.Banned); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.Role, &u.Banned, &u.DisplayName, &u.Bio); err != nil {
 			return nil, err
 		}
 		out = append(out, u)

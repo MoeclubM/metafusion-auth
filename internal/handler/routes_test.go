@@ -73,6 +73,7 @@ var frozenRoutes = []string{
 	"PUT /api/admin/users/:id/role",
 	"PUT /api/developer/apps/:id",
 	"PUT /api/auth/password",
+	"PUT /api/auth/profile",
 }
 
 func TestRoutesMatchFrozenContract(t *testing.T) {

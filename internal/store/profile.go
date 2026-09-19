@@ -10,7 +10,9 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -20,6 +22,9 @@ type PublicUser struct {
 	ID       string `json:"id"`
 	Username string `json:"username"`
 	Role     string `json:"role"`
+	// 昵称与简介是公开资料的一部分（空串=未设置，前端回退用户名/占位）。
+	DisplayName string `json:"display_name,omitempty"`
+	Bio         string `json:"bio,omitempty"`
 	// Banned 沿用 User.Banned 的 omitempty 口径：只在为真时下发。
 	//
 	// 被 ban 的账号照样返回资料，只带上"已停用"这个事实：封禁是访问控制（不能登录/续期/验签），
@@ -60,6 +65,44 @@ const invitedCountQuery = "SELECT count(DISTINCT iu.user_id)" +
 // 非 uuid 与查不到都返回 sql.ErrNoRows（HTTP 层统一映射 404）：把非法参数原样丢给
 // postgres 会得到 22P02 报错，那会以 500 暴露"参数直接进了 SQL"，而且同一个"没有这个账号"
 // 会因写法不同拿到不同状态码。
+// 资料长度上限（按 rune 计）：昵称 32 字、简介 500 字。超限 400，前后端同一口径
+// （前端 settings 页的 hint 写同一数字，改一处必须改另一处）。
+const (
+	MaxDisplayNameRunes = 32
+	MaxBioRunes         = 500
+)
+
+// UpdateProfile 自助改昵称与简介：只认本人 userID。空串=未设置（回退用户名/占位）。
+func (s *Store) UpdateProfile(ctx context.Context, userID, displayName, bio string) (PublicUser, error) {
+	var out PublicUser
+	displayName = strings.TrimSpace(displayName)
+	bio = strings.TrimSpace(bio)
+	if utf8.RuneCountInString(displayName) > MaxDisplayNameRunes {
+		return out, fmt.Errorf("invalid_display_name")
+	}
+	if utf8.RuneCountInString(bio) > MaxBioRunes {
+		return out, fmt.Errorf("invalid_bio")
+	}
+	err := s.DB.QueryRowContext(ctx,
+		"UPDATE auth.users SET display_name=$2,bio=$3 WHERE id=$1 RETURNING id,username,display_name,bio",
+		userID, displayName, bio).Scan(&out.ID, &out.Username, &out.DisplayName, &out.Bio)
+	if err != nil {
+		return out, err // 含 sql.ErrNoRows → 404（账号在令牌有效期内被删）
+	}
+	return out, nil
+}
+
+// FillProfile 给 /auth/me 补读穿：JWT 投影里的昵称/简介至多陈旧一个令牌周期，
+// /auth/me 按 id 回表取最新列，其余字段沿用令牌投影（权限与角色走验签路径，不碰）。
+func (s *Store) FillProfile(ctx context.Context, u *User) error {
+	if u == nil {
+		return sql.ErrNoRows
+	}
+	return s.DB.QueryRowContext(ctx,
+		"SELECT COALESCE(display_name,''),COALESCE(bio,'') FROM auth.users WHERE id=$1", u.ID).
+		Scan(&u.DisplayName, &u.Bio)
+}
+
 func (s *Store) PublicProfile(ctx context.Context, id, viewerID string) (PublicProfile, error) {
 	var out PublicProfile
 	if s.DB == nil {
@@ -76,8 +119,8 @@ func (s *Store) PublicProfile(ctx context.Context, id, viewerID string) (PublicP
 	id = uid.String()
 	var banned bool
 	err = s.DB.QueryRowContext(ctx,
-		"SELECT id,username,COALESCE(email,''),role,banned FROM auth.users WHERE id=$1", id).
-		Scan(&out.User.ID, &out.User.Username, &out.User.Email, &out.User.Role, &banned)
+		"SELECT id,username,COALESCE(email,''),role,banned,COALESCE(display_name,''),COALESCE(bio,'') FROM auth.users WHERE id=$1", id).
+		Scan(&out.User.ID, &out.User.Username, &out.User.Email, &out.User.Role, &banned, &out.User.DisplayName, &out.User.Bio)
 	if err != nil {
 		return out, err // 含 sql.ErrNoRows → 404
 	}

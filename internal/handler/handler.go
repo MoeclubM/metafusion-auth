@@ -144,7 +144,36 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		respond(c, gin.H{"token": next, "access_token": next, "token_type": "Bearer", "expires_in": int(store.AccessTokenTTL.Seconds()), "user": u}, err)
 	})
 
-	api.GET("/auth/me", requireUser(), func(c *gin.Context) { respond(c, currentUser(c), nil) })
+	api.GET("/auth/me", requireUser(), func(c *gin.Context) {
+		u := currentUser(c)
+		// 昵称/简介读穿 DB：JWT 投影至多陈旧一个令牌周期，/auth/me 按 id 回表取最新。
+		// 行没了（令牌有效期内账号被删）也不在这里 404——认证链已放行，资料缺省即可。
+		if u != nil {
+			_ = s.FillProfile(c.Request.Context(), u)
+		}
+		respond(c, u, nil)
+	})
+	// 改自己的昵称与简介只有这一条入口（前端设置页也只调它）。空串=未设置，超限 400。
+	updateProfile := func(c *gin.Context) {
+		u := currentUser(c)
+		if u == nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		var in struct {
+			DisplayName string `json:"display_name"`
+			Bio         string `json:"bio"`
+		}
+		if !body(c, &in) {
+			return
+		}
+		out, err := s.UpdateProfile(c.Request.Context(), u.ID, in.DisplayName, in.Bio)
+		if err == nil {
+			audit.Describe(c, audit.Detail{TargetType: "user", TargetID: u.ID, Changes: map[string]any{"profile_updated": true, "self_service": true}})
+		}
+		respond(c, out, err)
+	}
+	api.PUT("/auth/profile", requireUser(), updateProfile)
 	api.POST("/auth/logout", requireUser(), func(c *gin.Context) {
 		token := tokenFromRequest(c)
 		clearSessionCookie(c)

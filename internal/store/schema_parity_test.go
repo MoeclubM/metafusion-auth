@@ -23,6 +23,9 @@ var frozenTableDefs = map[string]map[string]string{
 		// 2026-09-16：账号封禁能力新增的列。默认 false，既有实例升级后行为不变；
 		// 冻结它是因为登录、续期、验签三处都读它，改错只在线上以"封了还能进"暴露。
 		"banned": "banned boolean not null default false",
+		// 自助资料列：公开读出、本人可写；空串=未设置。
+		"display_name": "display_name text not null default ''",
+		"bio":          "bio text not null default ''",
 	},
 	"auth.sessions": {
 		"token_hash": "token_hash text primary key",
