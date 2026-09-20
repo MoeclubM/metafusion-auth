@@ -29,9 +29,25 @@ type User struct {
 	Bio         string   `json:"bio,omitempty"`
 	Groups      []string `json:"groups,omitempty"`
 	Permissions []string `json:"permissions,omitempty"`
+	// TokenUse 标记该身份所持令牌的用途（S01）：session=站内会话，oauth=第三方
+	// OAuth 访问令牌，id_token=OIDC 断言，空串=历史令牌（按会话语义兼容）。
+	// ClientID/Scope 只在第三方身份上出现（哪次授权、授予了哪些 scope）。
+	// omitempty 保证站内载荷形状不变；下游管理 API 必须拒绝非会话用途。
+	TokenUse string `json:"token_use,omitempty"`
+	ClientID string `json:"client_id,omitempty"`
+	Scope    string `json:"scope,omitempty"`
 	// Banned 只在为真时下发：既有客户端的载荷形状保持不变（omitempty），
 	// 管理台据此显示封禁状态。
 	Banned bool `json:"banned,omitempty"`
+}
+
+// IsThirdParty 报告该身份是否来自第三方 OAuth 令牌（access_token 或 id_token）。
+// 这类身份只代表"谁"，不代表"能做什么"：管理授权一律拒绝，身份展示再按 scope 裁剪。
+func (u *User) IsThirdParty() bool {
+	if u == nil {
+		return false
+	}
+	return u.TokenUse == TokenUseOAuth || u.TokenUse == TokenUseIDToken
 }
 
 // Store 组合数据库与令牌签发器：签发器为 nil 时退化为纯查库模式，

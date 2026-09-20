@@ -148,7 +148,9 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		u := currentUser(c)
 		// 昵称/简介读穿 DB：JWT 投影至多陈旧一个令牌周期，/auth/me 按 id 回表取最新。
 		// 行没了（令牌有效期内账号被删）也不在这里 404——认证链已放行，资料缺省即可。
-		if u != nil {
+		// S01：第三方令牌跳过读穿——它的身份就是签发时 scope 裁剪后的投影，
+		// 回表补昵称/简介等于把没授予的展示字段再贴回去。
+		if u != nil && !u.IsThirdParty() {
 			_ = s.FillProfile(c.Request.Context(), u)
 		}
 		respond(c, u, nil)
@@ -567,6 +569,8 @@ func requireUser() gin.HandlerFunc {
 // requirePermission 是管理台的细粒度闸门：**只认这一条码**（判定见 store.Can）。
 // 这里刻意不做"持任意 auth.* 码即视为管理员"的兜底：那会让持 auth.invites.manage 的
 // 成员通过 /api/admin/users 等其它域的闸门，把"每人只拿到被授予的那些码"打穿。
+// S01：第三方 OAuth 令牌（token_use=oauth/id_token）在 store.Can 里统一拒绝，
+// 因此无需在此逐个判断——profile-only 的第三方令牌打管理路由一律 403。
 func requirePermission(code string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		u := currentUser(c)

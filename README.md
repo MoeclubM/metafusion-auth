@@ -188,6 +188,36 @@ PAT 内省是另一套独立限流（IP 与令牌双维度，**不读**上面两
 令牌响应里的 `scope` 就是最终授予的集合。`auth.oauth_clients.scopes` 是每个客户端自己的白名单，
 存量行按列默认值补齐全部三种，行为与拆分前一致。
 
+**令牌用途隔离（S01）**：站内会话、第三方 OAuth 访问令牌、`id_token`、PAT 是四种不同用途，
+签发侧已不再签出可越权的第三方令牌：
+
+| 令牌 | `token_use` | 身份内容 | 管理 API |
+| --- | --- | --- | --- |
+| 站内会话（login/register/refresh） | `session` | 完整身份：真实 `role`/`groups`/`permissions`/`email` | 按权限码正常判定 |
+| 第三方 OAuth 访问令牌 | `oauth`（另带 `client_id`/`scope`） | 最小身份：`role` 恒为 `user`、组与权限恒空；`username` 仅 profile 授予时有值，`email` 仅 email 授予时有值 | **默认拒绝**（本站管理路由 403，下游同样必须拒绝） |
+| `id_token`（`aud` 指向当事客户端） | `id_token` | 与 userinfo 同口径（profile→`username`/`role`，email→`email`，组与权限不带） | **默认拒绝** |
+| PAT（`mfp_`，走内省） | 无（不在 JWT 体系内） | 内省返回有效权限（账号现时权限 ∩ scopes） | 按内省 `permissions` 用 `HasPermission` 判定，空即无权 |
+
+- `audience` 仍是平台受众（JWKS/issuer 配置不动）：下游**不能只验 aud**，必须再看 `token_use`。
+  未升级的下游也不会被越权——第三方令牌里的 `role`/`permissions` 已是最小值，`Can` 类按 `role` 兜底的旧判定同样放行不了。
+- `/api/oauth/token` 响应的 `user` 与 `access_token`/`id_token` 自身都按授予 scope 裁剪
+  （JWT 可被第三方直接解码，userinfo 的裁剪盖不住它）；`GET /api/auth/me` 对第三方令牌只返回令牌投影，不再回表补昵称/简介。
+- 本站管理闸门（`requirePermission`/`store.Can`）对 `token_use=oauth`/`id_token` 统一拒绝；
+  `POST /api/auth/tokens`（PAT 创建）等自助端点同样不再接受第三方令牌提权（`NormalizePATScopes` 经 `Can` 直接失败）。
+- 历史令牌（无 `token_use` 字段，≤15 分钟自然过期）仍按会话语义兼容，不做强制作废。
+
+**下游验签/内省契约更新与迁移说明**（目录 / 互动 / 存储同步实施）：
+
+1. 验签保持 issuer/audience/JWKS 不变，新增一条规则：`token_use` 缺席或为 `session` 才进入管理授权；
+   `oauth`/`id_token` 在管理路由上直接 401/403，只在纯身份读取面按 `scope` 裁剪展示（`sub` 恒可用，
+   `username` 需 profile，`email` 需 email）。未知 `token_use` 取值一律拒收。
+2. 授权判定统一为：会话令牌走既有权限码判定（含历史 role 兜底，仅限无 `permissions` 声明的老令牌）；
+   第三方与 PAT 身份一律用 `HasPermission(permissions, code)` 语义——**显式空权限就是无权，
+   不得回落到 `role=admin`**（存储 `permission.go:76` 与互动兼容路径的同类兜底同步删除）。
+3. 上线顺序：账号服务与各业务服务同批部署；单服务先上不影响另一侧（新令牌对旧下游是最小权限，
+   旧令牌对新下游按历史语义兼容，均 fail-closed）。第一方前端的管理操作必须走站内会话
+   （login/refresh + Cookie），不得再拿 OAuth 访问令牌调用管理 API。
+
 **令牌有效期与续期**：访问令牌是 15 分钟 RS256 JWT（`expires_in` 报真实值）；
 未配置签发器时退化为不透明令牌（30 天，`expires_in` 为 2592000，兼容旧口径）。
 本服务**不签发 `refresh_token`**：
@@ -228,6 +258,10 @@ PAT 内省是另一套独立限流（IP 与令牌双维度，**不读**上面两
   （重启后已签发令牌失效，靠会话兜底），此时启动会打 WARNING。
 - `issuer`/`audience` 必须与主仓库完全一致（默认 `https://findverse.cc/api` / `metafusion`），
   否则存量令牌全部失效；受众按登记集合校验，OIDC `id_token` 以 `client_id` 为受众。
+- 载荷新增 `token_use`（`session`/`oauth`/`id_token`，历史令牌缺席）与第三方绑定的
+  `client_id`/`scope`：用途区分不靠 `audience` 区分（见上节「令牌用途隔离」），未知取值验签直接拒绝。
+- 不透明降级路径（未配置签发器）同样隔离：第三方令牌行在读侧（`User`/`UserFromOAuthToken`/
+  `OAuthUserinfo`）按行内 `scope` 裁剪为最小身份，不补权限组；会话行才补 `WithAccess`。
 - 注销为单实例内存实现（jti 集合直到自然过期）：多副本部署需要共享状态，当前未支持。
 
 ## 数据与迁移

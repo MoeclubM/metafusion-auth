@@ -44,6 +44,33 @@ type Claims struct {
 	IssuedAt    int64    `json:"iat"`
 	Expires     int64    `json:"exp"`
 	JTI         string   `json:"jti"`
+	// TokenUse 区分令牌用途（S01）：session=站内会话（完整权限），oauth=第三方
+	// OAuth 访问令牌（仅身份、无管理能力），id_token=OIDC 断言（仅发给当事客户端）。
+	// 缺省（空串）按历史会话语义处理，保证存量令牌可验；下游管理 API 只接受
+	// session/缺省，oauth/id_token 一律拒绝（见 Can 与各服务的验签契约）。
+	TokenUse string `json:"token_use,omitempty"`
+	// ClientID/Scope 只在 oauth/id_token 上出现：令牌被绑定到哪次授权，
+	// 下游据此做身份展示的 scope 裁剪，而不是据此放行管理能力。
+	ClientID string `json:"client_id,omitempty"`
+	Scope    string `json:"scope,omitempty"`
+}
+
+// 令牌用途取值。与 User.TokenUse 同源（见 store.go），判定只认这三个值与空串。
+const (
+	TokenUseSession = "session"
+	TokenUseOAuth   = "oauth"
+	TokenUseIDToken = "id_token"
+)
+
+// validTokenUse 判定载荷里的用途声明是否合法：未知取值直接拒收，
+// 防止将来新增用途的令牌被当成已知用途放行。
+func validTokenUse(use string) bool {
+	switch use {
+	case "", TokenUseSession, TokenUseOAuth, TokenUseIDToken:
+		return true
+	default:
+		return false
+	}
 }
 
 // TokenIssuer 持有签名私钥与验签公钥。零值不可用，需经 NewTokenIssuerFromEnv。
@@ -150,13 +177,34 @@ func (s *Store) TokenIssuerURL() string {
 	return s.Tokens.Issuer()
 }
 
-// Sign 签发访问令牌，返回 token 与其 jti（jti 用于注销与审计关联）。
+// Sign 签发站内会话访问令牌，返回 token 与其 jti（jti 用于注销与审计关联）。
+// 会话令牌携带完整身份与权限（role/groups/permissions/email），供站内管理 API 使用。
 func (t *TokenIssuer) Sign(u User) (string, string, time.Time, error) {
+	u.TokenUse = TokenUseSession
+	u.ClientID, u.Scope = "", ""
 	return t.sign(u, t.audience)
+}
+
+// SignOAuth 签发第三方 OAuth 访问令牌（S01）：audience 仍是平台受众（JWKS/issuer
+// 配置不动），但载荷只剩 scope 裁剪后的身份——role 恒为 user、组与权限恒空、
+// email 仅在授予 email scope 时出现。未打补丁的下游即使只验 aud，也会因
+// role/permissions 为空而拒绝管理能力；已打补丁的下游再按 token_use=oauth
+// 在管理 API 上默认拒绝（见 README「令牌用途隔离」）。
+func (t *TokenIssuer) SignOAuth(u User, clientID string, scopes []string) (string, string, time.Time, error) {
+	if strings.TrimSpace(clientID) == "" {
+		return "", "", time.Time{}, errors.New("empty client_id")
+	}
+	ru := OAuthTokenUser(u, scopes)
+	ru.TokenUse = TokenUseOAuth
+	ru.ClientID = strings.TrimSpace(clientID)
+	ru.Scope = FormatScopes(scopes)
+	return t.sign(ru, t.audience)
 }
 
 // SignForAudience 以指定 aud 签发令牌，用于 OIDC id_token（aud 指向客户端）。
 // 签发即登记该受众：Verify 只接受已登记受众，未登记的 aud 一律拒绝。
+// id_token 只发给当事客户端（aud=client_id，平台受众的验签方天然拒收），
+// 用途标记为 id_token，同样不得用于站内管理 API。
 func (t *TokenIssuer) SignForAudience(u User, audience string) (string, time.Time, error) {
 	if audience == "" {
 		return "", time.Time{}, errors.New("empty audience")
@@ -164,6 +212,8 @@ func (t *TokenIssuer) SignForAudience(u User, audience string) (string, time.Tim
 	t.mu.Lock()
 	t.audiences[audience] = true
 	t.mu.Unlock()
+	u.TokenUse = TokenUseIDToken
+	u.ClientID, u.Scope = "", ""
 	token, _, exp, err := t.sign(u, audience)
 	return token, exp, err
 }
@@ -184,6 +234,7 @@ func (t *TokenIssuer) sign(u User, audience string) (string, string, time.Time, 
 		Groups: u.Groups, Permissions: u.Permissions,
 		Issuer: t.issuer, Audience: audience,
 		IssuedAt: now.Unix(), Expires: exp.Unix(), JTI: jti,
+		TokenUse: u.TokenUse, ClientID: u.ClientID, Scope: u.Scope,
 	}
 	payload, err := json.Marshal(claims)
 	if err != nil {
@@ -242,6 +293,10 @@ func (t *TokenIssuer) Verify(token string) (*Claims, error) {
 	var claims Claims
 	if err := json.Unmarshal(payloadRaw, &claims); err != nil {
 		return nil, errors.New("malformed payload")
+	}
+	// 未知用途的令牌一律拒收：不能把将来新增用途的令牌当成已知用途放行。
+	if !validTokenUse(claims.TokenUse) {
+		return nil, errors.New("bad token_use")
 	}
 	now := t.clock().Unix()
 	if claims.Expires == 0 || now >= claims.Expires {
@@ -317,7 +372,16 @@ func ClaimsToUser(c *Claims) *User {
 		return nil
 	}
 	// 组与权限随令牌下发：下游服务本地验签即可判定能力；权限变更最迟在令牌续期时生效。
-	return &User{ID: c.Subject, Username: c.Username, Email: c.Email, Role: c.Role, Groups: c.Groups, Permissions: c.Permissions}
+	// 用途与授权绑定一并透传：管理闸门（Can/requirePermission）据此拒绝第三方令牌，
+	// 而不是只看 role/permissions 是否为空（显式空权限不得回落，见 access.go）。
+	u := &User{ID: c.Subject, Username: c.Username, Email: c.Email, Role: c.Role, Groups: c.Groups, Permissions: c.Permissions,
+		TokenUse: c.TokenUse, ClientID: c.ClientID, Scope: c.Scope}
+	// 进程内把第三方身份的空权限显式化：JSON 反序列化后 nil 与 [] 都是 len 0，
+	// 这里统一成空切片，表明"已声明无权限"，而不是"没有权限声明"。
+	if (u.TokenUse == TokenUseOAuth || u.TokenUse == TokenUseIDToken) && u.Permissions == nil {
+		u.Permissions = []string{}
+	}
+	return u
 }
 
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }

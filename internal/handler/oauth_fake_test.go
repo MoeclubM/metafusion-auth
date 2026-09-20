@@ -224,9 +224,11 @@ func (f *fakeOAuth) ExchangeOAuthCode(ctx context.Context, clientID, clientSecre
 	}
 	// 与生产一致：配置了签发器时访问令牌就是 RS256 JWT（因此同一枚令牌也能被
 	// 身份中间件验签），没有签发器才退回不透明随机串。
+	// S01：同样先收敛成最小身份再签（role 恒为 user、无权限、按 scope 裁剪），
+	// 否则链路用例拿到的令牌会比生产的多出管理能力，隔离断言就验错了对象。
 	token := f.next("at")
 	if f.tokens != nil {
-		signed, _, _, err := f.tokens.Sign(user)
+		signed, _, _, err := f.tokens.SignOAuth(store.OAuthTokenUser(user, granted), clientID, granted)
 		if err != nil {
 			return store.OAuthGrant{}, err
 		}
@@ -254,11 +256,12 @@ func (f *fakeOAuth) OAuthUserinfo(ctx context.Context, token string) (*store.Use
 	return &u, t.scope, nil
 }
 
-func (f *fakeOAuth) IDToken(u store.User, clientID string) (string, int64, error) {
+func (f *fakeOAuth) IDToken(u store.User, clientID string, scopes []string) (string, int64, error) {
 	if f.tokens == nil {
 		return "", 0, nil
 	}
-	token, exp, err := f.tokens.SignForAudience(u, clientID)
+	// 与生产 store.IDToken 同口径：按授予 scope 裁剪后再签。
+	token, exp, err := f.tokens.SignForAudience(store.IDTokenUser(u, scopes), clientID)
 	if err != nil {
 		return "", 0, err
 	}

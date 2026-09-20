@@ -113,6 +113,13 @@ func Can(u *User, code string) bool {
 	if u == nil {
 		return false
 	}
+	// 第三方 OAuth 令牌永不直接授权（S01）：它只证明"用户把部分身份展示给了某应用"，
+	// 不携带任何业务权限。即使 permissions 为空且 role 为 admin（历史签发残留），
+	// 也必须拒绝——显式空权限不得回落到角色兜底。下游同样只能用
+	// HasPermission(principal.Permissions, code) 语义判定这类身份。
+	if u.IsThirdParty() {
+		return false
+	}
 	if len(u.Permissions) > 0 {
 		return HasPermission(u.Permissions, code)
 	}

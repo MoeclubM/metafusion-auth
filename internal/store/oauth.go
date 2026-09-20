@@ -119,6 +119,47 @@ func ConvergeScopes(requested, allowed []string) []string {
 // FormatScopes 是 scope 的存储与传输形式：空格分隔（与 OAuth 的 scope 参数一致）。
 func FormatScopes(scopes []string) string { return strings.Join(scopes, " ") }
 
+// HasOAuthScope 报告一次授权是否含某项 scope（第三方身份展示的裁剪依据）。
+func HasOAuthScope(scopes []string, code string) bool {
+	for _, s := range scopes {
+		if strings.TrimSpace(s) == code {
+			return true
+		}
+	}
+	return false
+}
+
+// OAuthTokenUser 把账号投影收敛成第三方访问令牌可携带的身份（S01）：只剩 scope
+// 裁剪后的展示字段，且永远不携带管理能力——role 恒为 user（防下游按 role 兜底），
+// 组与权限恒空（防按码放行），email 仅在授予 email 时出现，username 仅在授予
+// profile 时出现。sub（ID）恒在，第三方靠它关联同一用户。
+func OAuthTokenUser(u User, scopes []string) User {
+	out := User{ID: u.ID, Role: "user", Permissions: []string{}}
+	if HasOAuthScope(scopes, "profile") {
+		out.Username = u.Username
+	}
+	if HasOAuthScope(scopes, "email") {
+		out.Email = u.Email
+	}
+	return out
+}
+
+// IDTokenUser 把账号投影收敛成 id_token 可携带的身份：与 userinfo 同口径
+// （profile→username/role，email→email），组与权限一律不带。id_token 的 aud
+// 指向当事客户端（平台受众验签方天然拒收），因此 role 可按 scope 携带，
+// 管理侧仍由 TokenUse=id_token 统一拒绝（见 Can）。
+func IDTokenUser(u User, scopes []string) User {
+	out := User{ID: u.ID, Role: "user"}
+	if HasOAuthScope(scopes, "profile") {
+		out.Username = u.Username
+		out.Role = u.Role
+	}
+	if HasOAuthScope(scopes, "email") {
+		out.Email = u.Email
+	}
+	return out
+}
+
 // ValidateClientScopes 校验管理 API 登记的客户端 scope 白名单：非空且全部受支持。
 func ValidateClientScopes(scopes []string) error {
 	if len(scopes) == 0 {
@@ -762,7 +803,10 @@ func (s *Store) ExchangeOAuthCode(ctx context.Context, clientID, clientSecret, c
 	}
 	// 签发 OIDC access_token：配置签发器时为 RS256 JWT（可被 JWKS 本地验签），
 	// 否则退回不透明随机串。无论哪种都只落 SHA-256 以便吊销。
-	token, jti, ttl, exp, err := s.signOAuthToken(u)
+	// S01：签发前先收敛成最小身份——第三方令牌不再携带账号的 role/组/权限，
+	// email/username 也只在授予对应 scope 时出现（JWT 自身可被第三方直接解码，
+	// userinfo 的裁剪盖不住它）。
+	token, jti, ttl, exp, err := s.signOAuthToken(OAuthTokenUser(u, granted), clientID, granted)
 	if err != nil {
 		return OAuthGrant{}, err
 	}
@@ -782,7 +826,9 @@ func (s *Store) ExchangeOAuthCode(ctx context.Context, clientID, clientSecret, c
 // signOAuthToken 为 OAuth/OIDC 流程签发访问令牌：有签发器用 RS256 JWT，
 // 否则用 32 字节随机串。返回值里的 jti 用于按客户端/用户批量吊销
 // （不透明随机串没有 jti，靠令牌行走吊销）。
-func (s *Store) signOAuthToken(u User) (string, string, time.Duration, int64, error) {
+// 调用方必须先经 OAuthTokenUser 收敛（见 ExchangeOAuthCode）：这里不再信任
+// 传入的 role/组/权限与 email，JWT 的 aud 仍是平台受众。
+func (s *Store) signOAuthToken(u User, clientID string, scopes []string) (string, string, time.Duration, int64, error) {
 	if s.Tokens == nil {
 		b := make([]byte, 32)
 		if _, err := rand.Read(b); err != nil {
@@ -790,7 +836,9 @@ func (s *Store) signOAuthToken(u User) (string, string, time.Duration, int64, er
 		}
 		return hex.EncodeToString(b), "", 30 * 24 * time.Hour, 0, nil
 	}
-	token, jti, exp, err := s.Tokens.Sign(u)
+	// 不透明路径下身份最小化发生在读侧（s.User 按行内 scope 裁剪）；JWT 路径
+	// 在这里绑定用途/客户端/scope（见 SignOAuth）。
+	token, jti, exp, err := s.Tokens.SignOAuth(u, clientID, scopes)
 	if err != nil {
 		return "", "", 0, 0, err
 	}
@@ -798,9 +846,11 @@ func (s *Store) signOAuthToken(u User) (string, string, time.Duration, int64, er
 	return token, jti, AccessTokenTTL, exp.Unix(), nil
 }
 
-// IDToken 为 OIDC 客户端签发 id_token：与访问令牌同密钥、同算法、同身份声明，
-// 额外把 aud 指向客户端。客户端可用 JWKS 公钥本地验签获得用户身份。
-func (s *Store) IDToken(u User, clientID string) (string, int64, error) {
+// IDToken 为 OIDC 客户端签发 id_token：与访问令牌同密钥、同算法，
+// aud 指向客户端，身份按授予 scope 裁剪（与 userinfo 同口径）。
+// 客户端可用 JWKS 公钥本地验签获得用户身份；该令牌用途为 id_token，
+// 不得用于站内管理 API（Can 统一拒绝）。
+func (s *Store) IDToken(u User, clientID string, scopes []string) (string, int64, error) {
 	if s.Tokens == nil {
 		return "", 0, nil
 	}
@@ -808,7 +858,7 @@ func (s *Store) IDToken(u User, clientID string) (string, int64, error) {
 	if aud == "" {
 		aud = s.Tokens.Audience()
 	}
-	token, exp, err := s.Tokens.SignForAudience(u, aud)
+	token, exp, err := s.Tokens.SignForAudience(IDTokenUser(u, scopes), aud)
 	if err != nil {
 		return "", 0, err
 	}
@@ -817,12 +867,17 @@ func (s *Store) IDToken(u User, clientID string) (string, int64, error) {
 
 func (s *Store) UserFromOAuthToken(ctx context.Context, token string) (*User, error) {
 	// 与 Authenticate 同口径：令牌有效不代表账号可用（封禁的账号不能借第三方令牌读 userinfo）。
+	// S01：返回的同样是最小身份（role 恒为 user、无组与权限），只够做"这是谁"的判定，
+	// 不够做任何授权判定；调用方不得据此放行管理能力。
 	var u User
-	err := s.DB.QueryRowContext(ctx, "SELECT u.id, u.username, COALESCE(u.email,''), u.role FROM auth.oauth_tokens t JOIN auth.users u ON u.id=t.user_id WHERE t.token_hash=$1 AND NOT u.banned AND t.expires_at>now()", sessionHash(token)).Scan(&u.ID, &u.Username, &u.Email, &u.Role)
+	var scope, clientID string
+	err := s.DB.QueryRowContext(ctx, "SELECT u.id, u.username, COALESCE(u.email,''), u.role, t.scope, t.client_id FROM auth.oauth_tokens t JOIN auth.users u ON u.id=t.user_id WHERE t.token_hash=$1 AND NOT u.banned AND t.expires_at>now()", sessionHash(token)).Scan(&u.ID, &u.Username, &u.Email, &u.Role, &scope, &clientID)
 	if err != nil {
 		return nil, err
 	}
-	return &u, nil
+	out := OAuthTokenUser(u, SplitScopes(scope))
+	out.TokenUse, out.ClientID, out.Scope = TokenUseOAuth, clientID, scope
+	return &out, nil
 }
 
 // ── 令牌吊销 ──

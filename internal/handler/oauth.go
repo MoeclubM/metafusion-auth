@@ -28,7 +28,7 @@ type oauthStore interface {
 	CreateOAuthCode(ctx context.Context, clientID string, userID string, redirectURI, requestedScope, challenge, method string) (string, string, error)
 	ExchangeOAuthCode(ctx context.Context, clientID, clientSecret, code, redirectURI, verifier string) (store.OAuthGrant, error)
 	OAuthUserinfo(ctx context.Context, token string) (*store.User, string, error)
-	IDToken(u store.User, clientID string) (string, int64, error)
+	IDToken(u store.User, clientID string, scopes []string) (string, int64, error)
 	RecordOAuthAudit(ctx context.Context, entry store.OAuthAuditEntry) error
 	CreateOAuthClient(ctx context.Context, in store.OAuthClientInput, actor *store.User) (store.OAuthClient, string, error)
 	UpdateOAuthClient(ctx context.Context, id string, in store.OAuthClientInput, actor *store.User) (store.OAuthClient, error)
@@ -160,15 +160,21 @@ func (h *Handler) registerOAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 			oauthErrorResponse(c, err)
 			return
 		}
+		// S01：token 响应的 user 与 access_token 自身都可被第三方直接读取，
+		// 因此与 userinfo 同口径裁剪（未授予 email 不得见 email，未授予 profile
+		// 不得见 username；role 恒为最小值，不向第三方暴露真实管理角色）。
+		granted := store.SplitScopes(grant.Scope)
+		scopedUser := store.OAuthTokenUser(*grant.User, granted)
 		resp := gin.H{
 			"access_token": grant.Token,
 			"token_type":   "Bearer",
 			"expires_in":   grant.ExpiresIn,
 			"scope":        grant.Scope,
-			"user":         grant.User,
+			"user":         scopedUser,
 		}
 		// OIDC：同密钥签发 id_token（aud 指向该客户端），客户端可用 JWKS 本地验签。
-		if idToken, exp, ierr := s.IDToken(*grant.User, clientID); ierr == nil && idToken != "" {
+		// id_token 同样按授予 scope 裁剪（见 store.IDTokenUser），用途为 id_token。
+		if idToken, exp, ierr := s.IDToken(*grant.User, clientID, granted); ierr == nil && idToken != "" {
 			resp["id_token"] = idToken
 			resp["id_token_expires_at"] = exp
 		}

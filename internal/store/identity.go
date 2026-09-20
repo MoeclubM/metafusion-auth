@@ -22,19 +22,27 @@ func (s *Store) User(ctx context.Context, token string) (*User, error) {
 	// NOT u.banned 是必须的：封禁后会话行与令牌行会被删掉，但"删行"与"封禁生效"之间
 	// 不该有窗口，读路径自己也拦一道（旧库/并行实例里残留的行同样按封禁处理）。
 	err := s.DB.QueryRowContext(ctx, "SELECT u.id,u.username,COALESCE(u.email,''),u.role FROM auth.sessions s JOIN auth.users u ON u.id=s.user_id WHERE s.token_hash=$1 AND NOT u.banned AND s.expires_at>now()", h).Scan(&u.ID, &u.Username, &u.Email, &u.Role)
-	if err != nil {
-		err = s.DB.QueryRowContext(ctx, "SELECT u.id,u.username,COALESCE(u.email,''),u.role FROM auth.oauth_tokens t JOIN auth.users u ON u.id=t.user_id WHERE t.token_hash=$1 AND NOT u.banned AND t.expires_at>now()", h).Scan(&u.ID, &u.Username, &u.Email, &u.Role)
+	if err == nil {
+		u.TokenUse = TokenUseSession
+		// 会话路径必须补齐组与权限：访问令牌过期（AccessTokenTTL）后请求回退到这里，
+		// 而 permissions 是唯一授权来源——漏掉就会让"role 仍是 user、权限全来自自定义组"的
+		// 成员在令牌过期那一刻丢掉全部能力（管理台入口消失、端点 403），续期路径却还有权限。
+		if err := s.WithAccess(ctx, &u); err != nil {
+			return &u, err
+		}
+		return &u, nil
 	}
+	// S01：第三方令牌行只解析出最小身份（role 恒为 user、无组与权限，email/username
+	// 按行内 scope 裁剪），且**不**补 WithAccess——补了等于把刚收敛掉的权限再贴回去。
+	// 不透明第三方令牌（未配置签发器时签发的那种）走这里，JWT 路径走验签。
+	var scope, clientID string
+	err = s.DB.QueryRowContext(ctx, "SELECT u.id, u.username, COALESCE(u.email,''), u.role, t.scope, t.client_id FROM auth.oauth_tokens t JOIN auth.users u ON u.id=t.user_id WHERE t.token_hash=$1 AND NOT u.banned AND t.expires_at>now()", h).Scan(&u.ID, &u.Username, &u.Email, &u.Role, &scope, &clientID)
 	if err != nil {
 		return &u, err
 	}
-	// 两条查库路径都必须补齐组与权限：访问令牌过期（AccessTokenTTL）后请求回退到这里，
-	// 而 permissions 是唯一授权来源——漏掉就会让"role 仍是 user、权限全来自自定义组"的
-	// 成员在令牌过期那一刻丢掉全部能力（管理台入口消失、端点 403），续期路径却还有权限。
-	if err := s.WithAccess(ctx, &u); err != nil {
-		return &u, err
-	}
-	return &u, nil
+	out := OAuthTokenUser(u, SplitScopes(scope))
+	out.TokenUse, out.ClientID, out.Scope = TokenUseOAuth, clientID, scope
+	return &out, nil
 }
 
 func (s *Store) SetupNeeded(ctx context.Context) (bool, error) {
