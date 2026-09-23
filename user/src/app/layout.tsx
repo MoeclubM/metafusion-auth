@@ -15,6 +15,7 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title: messages["app.title"] ?? "MetaFusion Account",
     description: messages["app.description"] ?? "",
+    icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
     robots: { index: false, follow: false },
   };
 }
