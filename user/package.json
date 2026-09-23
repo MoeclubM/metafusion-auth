@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start -p 3000",
     "i18n:check": "node scripts/check-i18n.mjs",
+    "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

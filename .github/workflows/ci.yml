@@ -72,3 +72,25 @@ jobs:
         run: bunx tsc --noEmit
       - name: next build
         run: bunx next build
+
+  user-ui:
+    name: user ui (bun install / i18n / test / tsc / next build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: user
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.0"
+      - name: bun install
+        run: bun install --frozen-lockfile
+      - name: i18n 一致性
+        run: bun run i18n:check
+      - name: 登录回跳测试
+        run: bun run test
+      - name: tsc --noEmit
+        run: bun run typecheck
+      - name: next build
+        run: bun run build
