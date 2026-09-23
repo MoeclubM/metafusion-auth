@@ -1,14 +1,22 @@
-/** 登录后只允许跳回本站的绝对路径。 */
-export function safeLoginRedirect(value: string | null): string {
-  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/";
-  if (/[\\\u0000-\u001f\u007f]/.test(value)) return "/";
+/** 登录回跳可为同源 URL 或路径，返回供 router 使用的站内路径。 */
+export function safeLoginRedirect(value: string | null, origin: string): string {
+  if (!value || /[\\\u0000-\u001f\u007f]/.test(value) || value.startsWith("//")) return "/";
 
   try {
-    const decoded = decodeURIComponent(value);
-    if (decoded.startsWith("//") || /[\\\u0000-\u001f\u007f]/.test(decoded)) return "/";
+    const base = new URL(origin);
+    const target = new URL(value, base);
+    if (
+      target.origin !== base.origin ||
+      (target.protocol !== "https:" && target.protocol !== "http:") ||
+      target.username !== "" ||
+      target.password !== ""
+    ) {
+      return "/";
+    }
+    const decodedPath = decodeURIComponent(target.pathname);
+    if (!decodedPath.startsWith("/") || decodedPath.startsWith("//") || /[\\\u0000-\u001f\u007f]/.test(decodedPath)) return "/";
+    return `${target.pathname}${target.search}${target.hash}`;
   } catch {
     return "/";
   }
-
-  return value;
 }

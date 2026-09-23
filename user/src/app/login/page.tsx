@@ -112,7 +112,7 @@ function LoginInner() {
 
   useEffect(() => {
     if (status !== "loading" && user) {
-      const redirectUrl = safeLoginRedirect(searchParams.get("redirect"));
+      const redirectUrl = safeLoginRedirect(searchParams.get("redirect"), window.location.origin);
       router.replace(redirectUrl);
     }
   }, [status, user, router, searchParams]);
@@ -142,7 +142,7 @@ function LoginInner() {
     setNotice(null);
     setSubmitting(true);
     try {
-      const redirectUrl = safeLoginRedirect(searchParams.get("redirect"));
+      const redirectUrl = safeLoginRedirect(searchParams.get("redirect"), window.location.origin);
       if (mode === "register") {
         await registerAccount({
           username: username.trim(),
