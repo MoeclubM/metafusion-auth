@@ -123,6 +123,7 @@ function LoginInner() {
   const switchTo = (next: AuthMode) => {
     setError(null);
     setNotice(null);
+    setPasswordVisible(false);
     if (next === "register" && hasAdmin === false) {
       router.push("/setup");
       return;
@@ -230,12 +231,13 @@ function LoginInner() {
             )}
             <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-4">
               <div className="space-y-1.5">
-                <label className="font-mono text-xs sm:text-sm text-text-muted">
+                <label htmlFor="login-username" className="font-mono text-xs sm:text-sm text-text-muted">
                   {mode === "register" ? t("auth.username") : t("auth.gate.emailOrUsername")}
                 </label>
                 <div className="relative">
                   <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" strokeWidth={1.5} />
                   <input
+                    id="login-username"
                     type="text"
                     required
                     maxLength={mode === "register" ? USERNAME_MAX_LENGTH : undefined}
@@ -249,10 +251,11 @@ function LoginInner() {
               </div>
               {mode === "register" && (
                 <div className="space-y-1.5 animate-fade-in">
-                  <label className="font-mono text-xs sm:text-sm text-text-muted">{t("auth.email")}</label>
+                  <label htmlFor="login-email" className="font-mono text-xs sm:text-sm text-text-muted">{t("auth.email")}</label>
                   <div className="relative">
                     <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" strokeWidth={1.5} />
                     <input
+                      id="login-email"
                       type="email"
                       required
                       autoComplete="email"
@@ -265,7 +268,7 @@ function LoginInner() {
                 </div>
               )}
               <div className="space-y-1.5">
-                <label className="font-mono text-xs sm:text-sm text-text-muted flex items-center justify-between gap-2">
+                <label htmlFor="login-password" className="font-mono text-xs sm:text-sm text-text-muted flex items-center justify-between gap-2">
                   <span>{t("auth.password")}</span>
                   {mode === "register" && (
                     <span className="text-xs text-text-faint font-normal">{t("auth.registerPasswordHint")}</span>
@@ -300,7 +303,7 @@ function LoginInner() {
               </div>
               {mode === "register" && showInviteField && (
                 <div className="space-y-1.5 animate-fade-in">
-                  <label className="font-mono text-xs sm:text-sm text-amber-600 dark:text-warn-soft flex items-center justify-between gap-2">
+                  <label htmlFor="login-invite-code" className="font-mono text-xs sm:text-sm text-amber-600 dark:text-warn-soft flex items-center justify-between gap-2">
                     <span>{t("auth.inviteCode")}</span>
                     <span className="text-xs text-text-faint font-normal">
                       {inviteRequired ? t("auth.required") : t("auth.optional")}
@@ -309,6 +312,7 @@ function LoginInner() {
                   <div className="relative">
                     <KeyRound className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-amber-500" strokeWidth={1.5} />
                     <input
+                      id="login-invite-code"
                       type="text"
                       required={inviteRequired}
                       placeholder={t("auth.inviteCodePlaceholder")}
