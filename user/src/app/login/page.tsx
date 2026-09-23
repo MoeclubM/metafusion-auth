@@ -165,17 +165,10 @@ function LoginInner() {
 
   return (
     <div className="h-[100dvh] max-h-[100dvh] overflow-hidden bg-background relative flex flex-col p-4 sm:p-5">
-      <div className="absolute inset-0 bg-radial-vignette opacity-70 pointer-events-none" />
-      <div className="absolute -top-40 -left-40 w-[500px] h-[500px] bg-primary/10 rounded-full blur-[120px] pointer-events-none" />
-      <div className="absolute -bottom-40 -right-40 w-[500px] h-[500px] bg-sky-500/10 rounded-full blur-[120px] pointer-events-none" />
-
       <PageContainer as="header" width="narrow" className="relative z-10 flex items-center justify-between shrink-0">
         <Link href="/" title="MetaFusion" className="flex items-center gap-2.5 group">
-          <BrandMark size={28} withGlow idSuffix="login" />
-          <span className="flex flex-col leading-none">
-            <span className="font-display text-xl tracking-[-0.03em] text-text-strong">MetaFusion</span>
-            <span className="font-mono text-[8px] tracking-[0.16em] text-text-faint dark:text-white/35 mt-[2px]">SINCE 2026</span>
-          </span>
+          <BrandMark size={28} idSuffix="login" />
+          <span className="font-display text-xl tracking-[-0.03em] text-text-strong">MetaFusion</span>
         </Link>
         <div className="flex items-center gap-2">
           <LocaleSwitcher />
@@ -196,7 +189,7 @@ function LoginInner() {
               <ArrowRight className="w-4 h-4 shrink-0 group-hover:translate-x-0.5 transition-transform duration-base ease-soft" />
             </Link>
           )}
-          <div className="rounded-card border border-line bg-surface/80 backdrop-blur-md shadow-soft overflow-hidden animate-scale-in">
+          <div className="rounded-card border border-line bg-surface shadow-soft overflow-hidden animate-scale-in">
             <div className="p-4 sm:p-5 pb-3 border-b border-line-subtle">
               <div className="min-w-0">
                 <h1 className="font-display text-xl sm:text-2xl font-bold tracking-tight text-text-strong">

@@ -32,7 +32,7 @@
   "auth.inviteCodePlaceholder": "MF-XXXXXX",
   "auth.settingsUnavailable": "Could not load this instance's registration settings; the server decides the final result",
   "auth.gate.createAccount": "Create account",
-  "auth.gate.secureLogin": "Secure sign in",
+  "auth.gate.secureLogin": "Sign in",
   "setup.requiredMissing": "Missing required fields: {fields}",
   "setup.usernameLabel": "Admin Username",
   "setup.emailLabel": "Admin Email",

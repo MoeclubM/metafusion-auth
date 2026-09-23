@@ -32,7 +32,7 @@
   "auth.inviteCodePlaceholder": "MF-XXXXXX",
   "auth.settingsUnavailable": "无法读取实例注册设置，最终以服务端校验结果为准",
   "auth.gate.createAccount": "创建账号",
-  "auth.gate.secureLogin": "立即安全登录",
+  "auth.gate.secureLogin": "登录",
   "setup.requiredMissing": "必填项缺失：{fields}",
   "setup.usernameLabel": "管理员用户名",
   "setup.emailLabel": "管理员邮箱",

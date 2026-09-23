@@ -32,7 +32,7 @@
   "auth.inviteCodePlaceholder": "MF-XXXXXX",
   "auth.settingsUnavailable": "無法讀取此實例的註冊設定，最終以伺服器驗證結果為準",
   "auth.gate.createAccount": "建立帳號",
-  "auth.gate.secureLogin": "立即安全登入",
+  "auth.gate.secureLogin": "登入",
   "setup.requiredMissing": "必填項缺失：{fields}",
   "setup.usernameLabel": "管理員使用者名稱",
   "setup.emailLabel": "管理員電子郵件",

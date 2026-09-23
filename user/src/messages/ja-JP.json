@@ -32,7 +32,7 @@
   "auth.inviteCodePlaceholder": "MF-XXXXXX",
   "auth.settingsUnavailable": "このインスタンスの登録設定を取得できませんでした。最終的な可否はサーバーの判定に従います",
   "auth.gate.createAccount": "アカウントを作成",
-  "auth.gate.secureLogin": "安全にログイン",
+  "auth.gate.secureLogin": "ログイン",
   "setup.requiredMissing": "必須項目が不足しています：{fields}",
   "setup.usernameLabel": "管理者ユーザー名",
   "setup.emailLabel": "管理者メールアドレス",
