@@ -1,11 +1,6 @@
 "use client";
 
-// 自助登录/注册页：Cookie 会话口径（冻结契约 v0.1 §1）。
-// 与主站 frontend/src/app/login/page.tsx 同流程：setup 门控、实例设置门控、邀请码、
-// ?notice= 白名单、凭据错误映射；差异仅三处：
-//  1. 会话经 useSession（mf_session Cookie + /me），不写 localStorage；
-//  2. 外部 SSO 分支（AUTH_PAGES_ENABLED）与 ?token= 回跳已随拆分删除——本应用就是登录页；
-//  3. ThemePicker 暂不搬运（换肤上下文是主站共享层），首版只留 LocaleSwitcher。
+// 自助登录与注册页。会话由同源 HttpOnly Cookie 维护，页面通过 /me 同步登录状态。
 
 import React, { useEffect, useState, Suspense } from "react";
 import { LoadingFallback } from "@/components/common/LoadingFallback";

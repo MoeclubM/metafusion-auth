@@ -1,8 +1,6 @@
 "use client";
 
-// 首次初始化页：Cookie 会话口径。与主站 frontend/src/app/setup/page.tsx 同流程
-// （三字段表单、12–72 位口令、两次确认、已初始化/成功态），差异：会话经 useSession
-// reload 同步，不写 localStorage；ThemePicker 暂不搬运。
+// 首次初始化页。账号服务完成初始化后签发同源 HttpOnly Cookie，会话通过 /me 同步。
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
