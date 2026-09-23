@@ -229,15 +229,13 @@ PAT 内省是另一套独立限流（IP 与令牌双维度，**不读**上面两
   将来若要做，前提是把 refresh 令牌并入同一套吊销表，并明确轮转与 TTL。
 
 **吊销**：`POST /api/admin/oauth/clients/{id}/revoke-tokens`（按客户端）与
-`POST /api/admin/users/{id}/revoke-oauth-tokens`（按用户）删除 `auth.oauth_tokens` 中未过期的行、
-作废尚未兑换的授权码，并把 jti 放进进程内注销集合；`userinfo` 以存活行为准，因此吊销或停用后立即 401。
+`POST /api/admin/users/{id}/revoke-oauth-tokens`（按用户）删除 `auth.oauth_tokens` 中未过期的行并作废尚未兑换的授权码；`userinfo` 会按存活行判定，因此吊销或停用后立即 401。其它服务以 JWKS 本地验签的无状态 access token 不查询这张表，不能据 `userinfo` 的即时失效推断下游验签立即撤销；无状态令牌的撤销窗口与 jti 处理见下文限制。
 
 - **用户自助撤回**：`GET /api/auth/oauth-grants` 列出"我给过哪些站点授权"，`DELETE /api/auth/oauth-grants/{client_id}`
   撤回其中一个。它与管理面两条吊销端点的区别是**归属**：路径里没有别人的 user id，只按当前登录身份删本人
   （`user_id + client_id`）的令牌与授权码，因此普通成员也能用；管理面端点保留（治理用，按客户端或按用户）。
   撤回是幂等的：本来就没有有效令牌时回 `revoked:0`，列表里该应用转为 `active:false`（同意审计仍在，用户能看到"曾授权过"）。
-- **限制（如实说明）**：其他服务用 JWKS 本地验签的无状态令牌无法被即时撤销，只能等这 15 分钟自然过期——
-  这是无状态 JWT 的固有性质；需要即时撤销时应改为回调本服务的 `userinfo`（introspection 未实现）。
+- **限制（如实说明）**：下游服务持有缓存 JWKS、只做本地验签时，账号服务进程内的 jti 注销集合不会同步到这些下游；即使此处 `userinfo` 已立即返回 401，下游仍可能在令牌剩余有效期（最多 15 分钟）内接受其签名。要即时统一撤销，需另有下游 introspection / 共享撤销状态机制；当前不得把 `userinfo` 的结果等同于所有服务立即拒绝。
 - 按用户吊销只动第三方令牌，不删该用户自己的服务端会话（那是 `/api/auth/logout-all` 的职责）。
 
 **审计**：`auth.oauth_audit` 记录 `consent_allow` / `consent_deny` / `trusted_allow` 与客户端
