@@ -184,17 +184,64 @@ func oauthClientSnapshot(client *store.OAuthClient) any {
 	}
 }
 
-// registerAudit 挂载审计读取面：GET /api/admin/audit-logs（唯一读取端点，见契约 §5）。
+// permissionAuditRead 是"看全量审计"的权限码：持有者按任意过滤条件查（管理台与排障），
+// 没有它的人仍能读**自己**的行（设置页"我的操作记录"）。
+const permissionAuditRead = "auth.audit.read"
+
+// registerAudit 挂载审计读取面：GET /api/admin/audit-logs（唯一读取路由，见契约 §5）。
+//
+// 闸门是 requireUser 而不是 requirePermission：同一端点分两档，取决于调用者是否持
+// permissionAuditRead——持码者按全量条件查，其余登录用户被收敛到本人。这样"读取面只有一个"
+// 这条契约不变（契约 §5 的取舍论证仍成立），也不必为自助视角新开第二个端点。
 func (h *Handler) registerAudit(api *gin.RouterGroup) {
-	api.GET("/admin/audit-logs", requirePermission("auth.audit.read"), func(c *gin.Context) {
+	api.GET("/admin/audit-logs", requireUser(), func(c *gin.Context) {
 		q, err := parseAuditQuery(c)
 		if err != nil {
+			respond(c, nil, err)
+			return
+		}
+		if err := scopeAuditQuery(c, &q); err != nil {
 			respond(c, nil, err)
 			return
 		}
 		page, err := h.store.ListAuditLogs(c.Request.Context(), q)
 		respond(c, page, err)
 	})
+}
+
+// scopeAuditQuery 把查询条件收敛到调用者被允许的范围：
+//   - 持 permissionAuditRead：原样放行（含 actor_user_id / actor 跨用户过滤）；
+//   - 其余登录用户：强制 actor_user_id = 自己。
+//
+// 越权过滤一律 403，不做静默改写：把 actor_user_id 悄悄换成自己，会让调用方以为它在查别人、
+// 实际拿到的是自己的行（翻页脚本会一路"成功"地读错数据），与 parseAuditQuery 拒绝非法 page
+// 而不回落 page=1 是同一条理由。
+//
+// actor 前缀对非特权调用者整体不接受：前缀无法约束到"只有我"——bob 传 actor=b 会命中 bobby。
+// 自助视图固定按 actor_user_id 查，本就不需要前缀。
+//
+// 第三方 OAuth 令牌（IsThirdParty）即使代表本人也拒绝：审计行带登录 IP、User-Agent、凭据类型
+// 与失败原因，构成本人的安全历史；把它交给一个当初只为"展示身份"而授权的应用，超出了 scope
+// 的含义。管理面不受影响（要权限码），/developer/* 也不受影响（那是应用元数据，不是安全历史）。
+func scopeAuditQuery(c *gin.Context, q *store.AuditQuery) error {
+	u := currentUser(c)
+	if u == nil {
+		return fmt.Errorf("authentication_required")
+	}
+	if store.Can(u, permissionAuditRead) {
+		return nil
+	}
+	if u.IsThirdParty() {
+		return fmt.Errorf("forbidden")
+	}
+	if q.ActorUserID != "" && !strings.EqualFold(q.ActorUserID, u.ID) {
+		return fmt.Errorf("forbidden")
+	}
+	if q.ActorPrefix != "" {
+		return fmt.Errorf("forbidden")
+	}
+	q.ActorUserID = u.ID
+	return nil
 }
 
 // parseAuditQuery 解析并校验读取面的查询参数。非法值一律 400 invalid_query:<参数>，

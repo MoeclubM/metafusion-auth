@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/MoeclubM/metafusion-auth/internal/audit"
 	"github.com/MoeclubM/metafusion-auth/internal/store"
 )
 
@@ -109,5 +110,70 @@ func TestParseAuditQueryRejectsInvalidFilters(t *testing.T) {
 	}
 	if len(q.Services) != 2 || len(q.Actions) != 2 || q.Page != 3 || q.PerPage != 2 {
 		t.Fatalf("解析结果不对：%#v", q)
+	}
+}
+
+// 读取面的分档收敛（不建库）：无 auth.audit.read 者只能读自己，跨用户过滤一律 403。
+func TestScopeAuditQueryConfinesNonPrivilegedCallers(t *testing.T) {
+	const selfID = "11111111-1111-1111-1111-111111111111"
+	const otherID = "22222222-2222-2222-2222-222222222222"
+
+	scoped := func(u *store.User, query string) (store.AuditQuery, error) {
+		c, _ := gin.CreateTestContext(nil)
+		c.Request = httptest.NewRequest("GET", "/api/admin/audit-logs?"+query, nil)
+		if u != nil {
+			c.Set(userKey, u)
+		}
+		q, err := parseAuditQuery(c)
+		if err != nil {
+			t.Fatalf("%q 的查询参数应合法，不该被拒：%v", query, err)
+		}
+		return q, scopeAuditQuery(c, &q)
+	}
+
+	plain := &store.User{ID: selfID, Username: "bob", Role: "user"}
+	privileged := &store.User{ID: selfID, Username: "bob", Role: "user", Permissions: []string{"auth.audit.read"}}
+	thirdParty := &store.User{ID: selfID, Username: "bob", Role: "user", TokenUse: store.TokenUseOAuth}
+
+	if _, err := scoped(nil, ""); err == nil || err.Error() != "authentication_required" {
+		t.Fatalf("匿名应收敛为 authentication_required，实际 %v", err)
+	}
+
+	// 无码：收敛到自己，且不动调用者自己的其它过滤条件。
+	for _, query := range []string{"", "actor_user_id=" + selfID, "action=user.profile_updated&result=failure"} {
+		q, err := scoped(plain, query)
+		if err != nil {
+			t.Fatalf("%q 应放行，实际 %v", query, err)
+		}
+		if q.ActorUserID != selfID {
+			t.Fatalf("%q 应被收敛到本人，实际 %q", query, q.ActorUserID)
+		}
+		if strings.Contains(query, "action=") && len(q.Actions) != 1 {
+			t.Fatalf("%q 的 action 过滤被清掉了：%#v", query, q.Actions)
+		}
+		if strings.Contains(query, "result=") && q.Result != audit.ResultFailure {
+			t.Fatalf("%q 的 result 过滤被清掉了：%q", query, q.Result)
+		}
+	}
+
+	// 无码：指向他人、或任何前缀过滤，一律 forbidden（不静默改写）。
+	for _, query := range []string{"actor_user_id=" + otherID, "actor=bob", "actor=b"} {
+		if _, err := scoped(plain, query); err == nil || err.Error() != "forbidden" {
+			t.Fatalf("%q 应 forbidden，实际 %v", query, err)
+		}
+	}
+
+	// 第三方 OAuth 令牌：即使代表本人也拒绝——审计行是本人的安全历史。
+	if _, err := scoped(thirdParty, ""); err == nil || err.Error() != "forbidden" {
+		t.Fatalf("第三方令牌应 forbidden，实际 %v", err)
+	}
+
+	// 持码者：原样放行，含跨用户过滤。
+	q, err := scoped(privileged, "actor_user_id="+otherID+"&actor=ali")
+	if err != nil {
+		t.Fatalf("持码者应放行，实际 %v", err)
+	}
+	if q.ActorUserID != otherID || q.ActorPrefix != "ali" {
+		t.Fatalf("持码者的过滤条件不该被改写：%#v", q)
 	}
 }

@@ -396,7 +396,7 @@ func TestAuditLogReadEndpointAgainstPostgres(t *testing.T) {
 	r, st, _ := newAuditTestServer(t)
 
 	_, adminName, adminBearer := insertChainUser(t, ctx, st, "admin")
-	_, _, memberBearer := insertChainUser(t, ctx, st, "user")
+	memberID, memberName, memberBearer := insertChainUser(t, ctx, st, "user")
 
 	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
 	action := "auditprobe_" + suffix + ".tick"
@@ -493,12 +493,41 @@ func TestAuditLogReadEndpointAgainstPostgres(t *testing.T) {
 		t.Fatalf("按 request_id 过滤应命中 1 行，实际 %d", got)
 	}
 
-	// 权限门：匿名 401、无码成员 403（都不该看到别人的审计）。
+	// 读取面分两档（契约 §5）：持 auth.audit.read 按全量条件查，其余登录用户被收敛到本人。
+	// 匿名仍然 401。
 	if w = get("action="+action, ""); w.Code != http.StatusUnauthorized {
 		t.Fatalf("匿名读取审计应 401，实际 %d", w.Code)
 	}
-	if w = get("action="+action, memberBearer); w.Code != http.StatusForbidden {
-		t.Fatalf("无 auth.audit.read 的成员应 403，实际 %d", w.Code)
+	// 无码成员：不再 403，而是被收敛到自己——探针行都挂在 admin 名下，所以是 0 行。
+	if w = get("action="+action, memberBearer); w.Code != http.StatusOK {
+		t.Fatalf("无 auth.audit.read 的成员应能读自己的行（200），实际 %d / %s", w.Code, w.Body.String())
+	}
+	if got := decodePage(w); got.Total != 0 || len(got.Items) != 0 {
+		t.Fatalf("无码成员不该看到别人的审计行，实际 total=%d items=%d", got.Total, len(got.Items))
+	}
+	// 本人自己的行确实读得到——否则上面的 0 行也可能只是"条件写坏了"而非"被收敛"。
+	ownRID := "mf-read-probe-" + suffix + "-own"
+	if _, err := st.DB.ExecContext(ctx, "INSERT INTO audit.audit_log(id, occurred_at, service, action, actor_user_id, actor_username, credential_type, actor_ip, actor_user_agent, target_type, target_id, changes, result, error_code, request_method, route, http_status, request_id) VALUES($1,$2,$3,$4,NULLIF($5,'')::uuid,$6,'session','198.51.100.9','probe-agent','entity',$7,'{}','success','','PUT','/api/catalog/entities/:id',200,$8)",
+		uuid.NewString(), base, audit.ServiceName, action, memberID, memberName, "probe-own", ownRID); err != nil {
+		t.Fatalf("插入本人探针行: %v", err)
+	}
+	if got := decodePage(get("action="+action, memberBearer)); got.Total != 1 || len(got.Items) != 1 || got.Items[0].TargetID != "probe-own" {
+		t.Fatalf("无码成员应看到自己那 1 行，实际 total=%d items=%d", got.Total, len(got.Items))
+	}
+	// 跨用户过滤一律 403，而不是被静默改写成自己（改写会让调用方读错数据还以为成功）。
+	if w = get("action="+action+"&actor_user_id="+uuid.NewString(), memberBearer); w.Code != http.StatusForbidden {
+		t.Fatalf("无码成员指定他人 actor_user_id 应 403，实际 %d / %s", w.Code, w.Body.String())
+	}
+	if w = get("action="+action+"&actor="+adminName[:6], memberBearer); w.Code != http.StatusForbidden {
+		t.Fatalf("无码成员用 actor 前缀过滤应 403，实际 %d / %s", w.Code, w.Body.String())
+	}
+	// 带上自己的 actor_user_id 是允许的（客户端可以统一带该参数），结果与不带一致。
+	if got := decodePage(get("action="+action+"&actor_user_id="+memberID, memberBearer)); got.Total != 1 {
+		t.Fatalf("无码成员带自己的 actor_user_id 应命中同样的 1 行，实际 %d", got.Total)
+	}
+	// 特权调用者不受收敛影响：仍能按他人过滤。
+	if got := decodePage(get("action="+action+"&actor_user_id="+memberID, adminBearer)); got.Total != 1 {
+		t.Fatalf("持 auth.audit.read 者按 actor_user_id 过滤应命中 1 行，实际 %d", got.Total)
 	}
 
 	// 非法参数：一律 400 invalid_query:<参数>。
@@ -542,8 +571,9 @@ func TestAuditLogReadEndpointAgainstPostgres(t *testing.T) {
 	if cross.Total != 1 || len(cross.Items) != 1 || cross.Items[0].Service != "catalog" {
 		t.Fatalf("读取面应能看到其它服务的审计行：%#v", cross)
 	}
-	if all := decodePage(get("action="+action+"&per_page=10", adminBearer)); all.Total != 6 {
-		t.Fatalf("不按服务过滤时应含跨服务行（共 6 行），实际 %d", all.Total)
+	// 5 行 admin 探针 + 1 行本人探针 + 1 行跨服务 = 7 行。
+	if all := decodePage(get("action="+action+"&per_page=10", adminBearer)); all.Total != 7 {
+		t.Fatalf("不按服务过滤时应含跨服务行（共 7 行），实际 %d", all.Total)
 	}
 
 	// 清理探针行：审计表不参与 testutil 的清库（它跨服务，不该被别的用例顺手清掉）。
