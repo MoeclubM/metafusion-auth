@@ -166,13 +166,15 @@ function LoginInner() {
 
   return (
     <div className="h-[100dvh] max-h-[100dvh] overflow-hidden bg-background relative flex flex-col p-4 sm:p-5">
-      <PageContainer as="header" width="narrow" className="relative z-10 flex items-center justify-between shrink-0">
-        <Link href="/" title="MetaFusion" className="flex items-center gap-2.5 group">
-          <BrandMark size={28} idSuffix="login" />
-          <span className="font-display text-xl tracking-[-0.03em] text-text-strong">MetaFusion</span>
-        </Link>
-        <div className="flex items-center gap-2">
-          <LocaleSwitcher />
+      <PageContainer as="header" width="narrow" className="relative z-10 shrink-0">
+        <div className="flex items-center justify-between gap-4">
+          <Link href="/" title="MetaFusion" className="flex items-center gap-2.5 group">
+            <BrandMark size={28} idSuffix="login" />
+            <span className="font-display text-xl tracking-[-0.03em] text-text-strong">MetaFusion</span>
+          </Link>
+          <div className="flex items-center gap-2">
+            <LocaleSwitcher />
+          </div>
         </div>
       </PageContainer>
 
