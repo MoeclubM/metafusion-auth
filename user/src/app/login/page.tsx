@@ -12,6 +12,7 @@ import { LoadingFallback } from "@/components/common/LoadingFallback";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useSession } from "@/lib/session";
+import { safeLoginRedirect } from "@/lib/redirect";
 import {
   fetchSetupStatus,
   fetchAuthSettings,
@@ -111,7 +112,7 @@ function LoginInner() {
 
   useEffect(() => {
     if (status !== "loading" && user) {
-      const redirectUrl = searchParams.get("redirect") || "/";
+      const redirectUrl = safeLoginRedirect(searchParams.get("redirect"));
       router.replace(redirectUrl);
     }
   }, [status, user, router, searchParams]);
@@ -141,7 +142,7 @@ function LoginInner() {
     setNotice(null);
     setSubmitting(true);
     try {
-      const redirectUrl = searchParams.get("redirect") || "/";
+      const redirectUrl = safeLoginRedirect(searchParams.get("redirect"));
       if (mode === "register") {
         await registerAccount({
           username: username.trim(),
