@@ -64,7 +64,7 @@ func TestConcurrentRegisterSameUsernameAgainstPostgres(t *testing.T) {
 	New(st).Register(r)
 
 	// 注册默认关闭（受控站点）：用例显式打开，收尾删掉该行回到默认值 false。
-	if err := st.UpdateSettings(ctx, map[string]any{store.SettingRegistrationEnabled: true}, &store.User{}); err != nil {
+	if err := st.UpdateSettings(ctx, map[string]any{store.SettingRegistrationEnabled: true}, settingsActor()); err != nil {
 		t.Fatalf("打开注册开关: %v", err)
 	}
 	t.Cleanup(func() {

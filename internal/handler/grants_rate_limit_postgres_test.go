@@ -88,7 +88,7 @@ func TestOAuthGrantsEndToEndAgainstPostgres(t *testing.T) {
 		Name:         strPtrHandler("自助撤回测试应用"),
 		RedirectURIs: &[]string{chainCallback},
 		Scopes:       &[]string{"openid", "profile"},
-	}, &store.User{ID: memberID, Username: "grant-admin"})
+	}, &store.User{ID: memberID, Username: "grant-admin", Permissions: []string{"auth.oauth.manage"}})
 	if err != nil {
 		t.Fatalf("建客户端: %v", err)
 	}
