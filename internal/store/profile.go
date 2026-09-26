@@ -1,7 +1,7 @@
 package store
 
 // 公开账号资料（GET /api/users/:id）：字段只来自 auth.users 里**真实存在的列**
-// （id / username / role / banned / email），不提供不存在的列，也不填占位值——
+// （id / username / display_name / bio / banned / email），不填没有来源的占位值——
 // 空字符串或 false 会被读成"这个人就是没头像 / 就是没开收藏"，而事实是"没有这个来源"。
 //
 // 与 User（登录态投影）的分工：这里不下发 password_hash、组与权限；email 是隐私字段，
@@ -21,7 +21,6 @@ import (
 type PublicUser struct {
 	ID       string `json:"id"`
 	Username string `json:"username"`
-	Role     string `json:"role"`
 	// 昵称与简介是公开资料的一部分（空串=未设置，前端回退用户名/占位）。
 	DisplayName string `json:"display_name,omitempty"`
 	Bio         string `json:"bio,omitempty"`
@@ -119,8 +118,8 @@ func (s *Store) PublicProfile(ctx context.Context, id, viewerID string) (PublicP
 	id = uid.String()
 	var banned bool
 	err = s.DB.QueryRowContext(ctx,
-		"SELECT id,username,COALESCE(email,''),role,banned,COALESCE(display_name,''),COALESCE(bio,'') FROM auth.users WHERE id=$1", id).
-		Scan(&out.User.ID, &out.User.Username, &out.User.Email, &out.User.Role, &banned, &out.User.DisplayName, &out.User.Bio)
+		"SELECT id,username,COALESCE(email,''),banned,COALESCE(display_name,''),COALESCE(bio,'') FROM auth.users WHERE id=$1", id).
+		Scan(&out.User.ID, &out.User.Username, &out.User.Email, &banned, &out.User.DisplayName, &out.User.Bio)
 	if err != nil {
 		return out, err // 含 sql.ErrNoRows → 404
 	}

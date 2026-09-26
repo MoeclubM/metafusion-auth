@@ -36,7 +36,6 @@ type Claims struct {
 	Subject     string   `json:"sub"`
 	Username    string   `json:"preferred_username"`
 	Email       string   `json:"email,omitempty"`
-	Role        string   `json:"role"`
 	Groups      []string `json:"groups,omitempty"`
 	Permissions []string `json:"permissions,omitempty"`
 	Issuer      string   `json:"iss"`
@@ -46,9 +45,8 @@ type Claims struct {
 	JTI         string   `json:"jti"`
 	// TokenUse 区分令牌用途（S01）：session=站内会话（完整权限），oauth=第三方
 	// OAuth 访问令牌（仅身份、无管理能力），id_token=OIDC 断言（仅发给当事客户端）。
-	// 缺省（空串）按历史会话语义处理，保证存量令牌可验；下游管理 API 只接受
-	// session/缺省，oauth/id_token 一律拒绝（见 Can 与各服务的验签契约）。
-	TokenUse string `json:"token_use,omitempty"`
+	// 下游管理 API 只接受 session，oauth/id_token 一律拒绝。
+	TokenUse string `json:"token_use"`
 	// ClientID/Scope 只在 oauth/id_token 上出现：令牌被绑定到哪次授权，
 	// 下游据此做身份展示的 scope 裁剪，而不是据此放行管理能力。
 	ClientID string `json:"client_id,omitempty"`
@@ -66,7 +64,7 @@ const (
 // 防止将来新增用途的令牌被当成已知用途放行。
 func validTokenUse(use string) bool {
 	switch use {
-	case "", TokenUseSession, TokenUseOAuth, TokenUseIDToken:
+	case TokenUseSession, TokenUseOAuth, TokenUseIDToken:
 		return true
 	default:
 		return false
@@ -178,7 +176,7 @@ func (s *Store) TokenIssuerURL() string {
 }
 
 // Sign 签发站内会话访问令牌，返回 token 与其 jti（jti 用于注销与审计关联）。
-// 会话令牌携带完整身份与权限（role/groups/permissions/email），供站内管理 API 使用。
+// 会话令牌携带完整身份与权限（groups/permissions/email），供站内管理 API 使用。
 func (t *TokenIssuer) Sign(u User) (string, string, time.Time, error) {
 	u.TokenUse = TokenUseSession
 	u.ClientID, u.Scope = "", ""
@@ -186,9 +184,8 @@ func (t *TokenIssuer) Sign(u User) (string, string, time.Time, error) {
 }
 
 // SignOAuth 签发第三方 OAuth 访问令牌（S01）：audience 仍是平台受众（JWKS/issuer
-// 配置不动），但载荷只剩 scope 裁剪后的身份——role 恒为 user、组与权限恒空、
-// email 仅在授予 email scope 时出现。未打补丁的下游即使只验 aud，也会因
-// role/permissions 为空而拒绝管理能力；已打补丁的下游再按 token_use=oauth
+// 配置不动），但载荷只剩 scope 裁剪后的身份——组与权限恒空、
+// email 仅在授予 email scope 时出现。下游再按 token_use=oauth
 // 在管理 API 上默认拒绝（见 README「令牌用途隔离」）。
 func (t *TokenIssuer) SignOAuth(u User, clientID string, scopes []string) (string, string, time.Time, error) {
 	if strings.TrimSpace(clientID) == "" {
@@ -230,7 +227,7 @@ func (t *TokenIssuer) sign(u User, audience string) (string, string, time.Time, 
 	}
 	jti := base64.RawURLEncoding.EncodeToString(jtiBytes)
 	claims := Claims{
-		Subject: u.ID, Username: u.Username, Email: u.Email, Role: u.Role,
+		Subject: u.ID, Username: u.Username, Email: u.Email,
 		Groups: u.Groups, Permissions: u.Permissions,
 		Issuer: t.issuer, Audience: audience,
 		IssuedAt: now.Unix(), Expires: exp.Unix(), JTI: jti,
@@ -374,7 +371,7 @@ func ClaimsToUser(c *Claims) *User {
 	// 组与权限随令牌下发：下游服务本地验签即可判定能力；权限变更最迟在令牌续期时生效。
 	// 用途与授权绑定一并透传：管理闸门（Can/requirePermission）据此拒绝第三方令牌，
 	// 而不是只看 role/permissions 是否为空（显式空权限不得回落，见 access.go）。
-	u := &User{ID: c.Subject, Username: c.Username, Email: c.Email, Role: c.Role, Groups: c.Groups, Permissions: c.Permissions,
+	u := &User{ID: c.Subject, Username: c.Username, Email: c.Email, Groups: c.Groups, Permissions: c.Permissions,
 		TokenUse: c.TokenUse, ClientID: c.ClientID, Scope: c.Scope}
 	// 进程内把第三方身份的空权限显式化：JSON 反序列化后 nil 与 [] 都是 len 0，
 	// 这里统一成空切片，表明"已声明无权限"，而不是"没有权限声明"。

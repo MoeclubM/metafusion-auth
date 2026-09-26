@@ -130,11 +130,11 @@ func HasOAuthScope(scopes []string, code string) bool {
 }
 
 // OAuthTokenUser 把账号投影收敛成第三方访问令牌可携带的身份（S01）：只剩 scope
-// 裁剪后的展示字段，且永远不携带管理能力——role 恒为 user（防下游按 role 兜底），
+// 裁剪后的展示字段，且永远不携带管理能力——
 // 组与权限恒空（防按码放行），email 仅在授予 email 时出现，username 仅在授予
 // profile 时出现。sub（ID）恒在，第三方靠它关联同一用户。
 func OAuthTokenUser(u User, scopes []string) User {
-	out := User{ID: u.ID, Role: "user", Permissions: []string{}}
+	out := User{ID: u.ID, Permissions: []string{}}
 	if HasOAuthScope(scopes, "profile") {
 		out.Username = u.Username
 	}
@@ -145,14 +145,13 @@ func OAuthTokenUser(u User, scopes []string) User {
 }
 
 // IDTokenUser 把账号投影收敛成 id_token 可携带的身份：与 userinfo 同口径
-// （profile→username/role，email→email），组与权限一律不带。id_token 的 aud
-// 指向当事客户端（平台受众验签方天然拒收），因此 role 可按 scope 携带，
+// （profile→username，email→email），组与权限一律不带。id_token 的 aud
+// 指向当事客户端（平台受众验签方天然拒收），
 // 管理侧仍由 TokenUse=id_token 统一拒绝（见 Can）。
 func IDTokenUser(u User, scopes []string) User {
-	out := User{ID: u.ID, Role: "user"}
+	out := User{ID: u.ID}
 	if HasOAuthScope(scopes, "profile") {
 		out.Username = u.Username
-		out.Role = u.Role
 	}
 	if HasOAuthScope(scopes, "email") {
 		out.Email = u.Email
@@ -235,7 +234,7 @@ var clientIDRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{2,63}$`)
 func ValidClientID(id string) bool { return clientIDRe.MatchString(strings.TrimSpace(id)) }
 
 // canManageOAuth 与 HTTP 层 requirePermission("auth.oauth.manage") 同源（store.Can）：
-// 令牌带 permissions 时一律以码为准，只有完全没有权限声明的老令牌才按历史 role=admin 兜底。
+// 只按权限码判定。
 func canManageOAuth(actor *User) bool { return Can(actor, "auth.oauth.manage") }
 
 // ValidateRedirectURIs 校验回调白名单：每一条都必须是 http(s) 绝对地址，
@@ -798,7 +797,7 @@ func (s *Store) ExchangeOAuthCode(ctx context.Context, clientID, clientSecret, c
 		return OAuthGrant{}, fmt.Errorf("invalid_scope")
 	}
 	var u User
-	if err = s.DB.QueryRowContext(ctx, "SELECT id, username, COALESCE(email,''), role FROM auth.users WHERE id=$1", userID).Scan(&u.ID, &u.Username, &u.Email, &u.Role); err != nil {
+	if err = s.DB.QueryRowContext(ctx, "SELECT id, username, COALESCE(email,'') FROM auth.users WHERE id=$1", userID).Scan(&u.ID, &u.Username, &u.Email); err != nil {
 		return OAuthGrant{}, err
 	}
 	// 签发 OIDC access_token：配置签发器时为 RS256 JWT（可被 JWKS 本地验签），
@@ -871,7 +870,7 @@ func (s *Store) UserFromOAuthToken(ctx context.Context, token string) (*User, er
 	// 不够做任何授权判定；调用方不得据此放行管理能力。
 	var u User
 	var scope, clientID string
-	err := s.DB.QueryRowContext(ctx, "SELECT u.id, u.username, COALESCE(u.email,''), u.role, t.scope, t.client_id FROM auth.oauth_tokens t JOIN auth.users u ON u.id=t.user_id WHERE t.token_hash=$1 AND NOT u.banned AND t.expires_at>now()", sessionHash(token)).Scan(&u.ID, &u.Username, &u.Email, &u.Role, &scope, &clientID)
+	err := s.DB.QueryRowContext(ctx, "SELECT u.id, u.username, COALESCE(u.email,''), t.scope, t.client_id FROM auth.oauth_tokens t JOIN auth.users u ON u.id=t.user_id WHERE t.token_hash=$1 AND NOT u.banned AND t.expires_at>now()", sessionHash(token)).Scan(&u.ID, &u.Username, &u.Email, &scope, &clientID)
 	if err != nil {
 		return nil, err
 	}
@@ -1266,7 +1265,6 @@ func (s *Store) ListOAuthAudits(ctx context.Context, clientID string, limit int)
 //
 // 这样吊销 / 停用 / 过期都能即时生效：JWT 在有效期内自身仍可验签，这是无状态令牌的
 // 固有性质——下游服务用 JWKS 本地验签时只能等短 TTL 自然过期（README 里如实写明）。
-// 兼容登录令牌：没有 oauth_tokens 行时回退 auth.sessions，此时 scope 记为空串。
 func (s *Store) OAuthUserinfo(ctx context.Context, token string) (*User, string, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
@@ -1275,12 +1273,9 @@ func (s *Store) OAuthUserinfo(ctx context.Context, token string) (*User, string,
 	hash := sessionHash(token)
 	var u User
 	var scope string
-	err := s.DB.QueryRowContext(ctx, "SELECT u.id, u.username, COALESCE(u.email,''), u.role, t.scope FROM auth.oauth_tokens t JOIN auth.users u ON u.id=t.user_id JOIN auth.oauth_clients c ON c.id=t.client_id WHERE t.token_hash=$1 AND t.expires_at>now() AND c.disabled=false", hash).Scan(&u.ID, &u.Username, &u.Email, &u.Role, &scope)
-	if err == nil {
-		return &u, scope, nil
-	}
-	if err := s.DB.QueryRowContext(ctx, "SELECT u.id, u.username, COALESCE(u.email,''), u.role FROM auth.sessions s JOIN auth.users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now()", hash).Scan(&u.ID, &u.Username, &u.Email, &u.Role); err != nil {
+	err := s.DB.QueryRowContext(ctx, "SELECT u.id, u.username, COALESCE(u.email,''), t.scope FROM auth.oauth_tokens t JOIN auth.users u ON u.id=t.user_id JOIN auth.oauth_clients c ON c.id=t.client_id WHERE t.token_hash=$1 AND t.expires_at>now() AND c.disabled=false", hash).Scan(&u.ID, &u.Username, &u.Email, &scope)
+	if err != nil {
 		return nil, "", fmt.Errorf("invalid_token")
 	}
-	return &u, "", nil
+	return &u, scope, nil
 }

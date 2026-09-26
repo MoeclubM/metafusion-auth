@@ -16,15 +16,12 @@ export const AUTH_AUDIT_READ = "auth.audit.read";
  *
  * 一律以服务端返回的 permissions 为准（含 * 通配）——前端判定只是"看不见"的界面收敛，
  * 不替代服务端鉴权：服务端的 requirePermission 才是唯一授权断言。
- * permissions 为空时按历史 role=admin 兜底，与 store.Can 完全一致；不这么做会出现
- * "服务端放行、界面全隐藏"的分裂（老令牌或还没配权限组的实例）。
+ * permissions 为空时不授予权限，与 store.Can 一致。
  */
 export function can(user: MeUser | null | undefined, code: string): boolean {
   if (!user) return false;
   const perms = user.permissions ?? [];
-  if (perms.includes("*") || perms.includes(code)) return true;
-  if (perms.length > 0) return false;
-  return user.role === "admin";
+  return perms.includes("*") || perms.includes(code);
 }
 
 /** 各管理面需要的码，也是导航与降级判定的唯一来源。 */

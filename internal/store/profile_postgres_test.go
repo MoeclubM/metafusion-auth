@@ -36,7 +36,7 @@ func TestPublicProfileAgainstPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("建管理员: %v", err)
 	}
-	member, err := s.CreateUserWithRole(ctx, "profile-member", "member@example.test", pwd, false, "user", &admin)
+	member, err := s.CreateUser(ctx, "profile-member", "member@example.test", pwd, false, &admin)
 	if err != nil {
 		t.Fatalf("建成员: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestPublicProfileAgainstPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("匿名读资料: %v", err)
 	}
-	if p.User.ID != member.ID || p.User.Username != "profile-member" || p.User.Role != "user" {
+	if p.User.ID != member.ID || p.User.Username != "profile-member" {
 		t.Fatalf("公开字段不符: %+v", p.User)
 	}
 	if p.User.Email != "" {
@@ -205,7 +205,7 @@ func TestUpdateProfileAgainstPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("建管理员: %v", err)
 	}
-	member, err := s.CreateUserWithRole(ctx, "profile-upd-member", "upd-member@example.test", pwd, false, "user", &admin)
+	member, err := s.CreateUser(ctx, "profile-upd-member", "upd-member@example.test", pwd, false, &admin)
 	if err != nil {
 		t.Fatalf("建成员: %v", err)
 	}

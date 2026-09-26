@@ -22,7 +22,6 @@ type AuditUserSnapshot struct {
 	ID       string
 	Username string
 	Email    string
-	Role     string
 	Banned   bool
 	Groups   []string
 }
@@ -35,8 +34,8 @@ func (s *Store) AuditUserSnapshot(ctx context.Context, id string) (*AuditUserSna
 	}
 	snap := &AuditUserSnapshot{ID: id}
 	err := s.DB.QueryRowContext(ctx,
-		"SELECT username, email, role, banned FROM auth.users WHERE id = NULLIF($1,'')::uuid", id).
-		Scan(&snap.Username, &snap.Email, &snap.Role, &snap.Banned)
+		"SELECT username, email, banned FROM auth.users WHERE id = NULLIF($1,'')::uuid", id).
+		Scan(&snap.Username, &snap.Email, &snap.Banned)
 	if err != nil {
 		return nil, err
 	}

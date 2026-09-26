@@ -21,8 +21,7 @@ func TestWriteEndpointsRejectUnknownFields(t *testing.T) {
 	// 管理面端点先过权限闸门再看载荷：这里带一个只持 auth.invites.manage 的令牌，
 	// 证明"未知字段被拒"发生在业务之前，而不是被 401/403 掩盖。
 	inviteOps := signBearer(t, s, store.User{
-		ID: "88888888-8888-8888-8888-888888888888", Username: "invite-ops", Role: "user",
-		Permissions: []string{"auth.invites.manage"},
+		ID: "88888888-8888-8888-8888-888888888888", Username: "invite-ops", Permissions: []string{"auth.invites.manage"},
 	})
 	cases := []struct{ name, method, path, bearer, payload string }{
 		{"setup 带 site_name", http.MethodPost, "/api/setup", "", `{"username":"admin","email":"a@b.c","password":"` + pw + `","site_name":"MyInstance"}`},

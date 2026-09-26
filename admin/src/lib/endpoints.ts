@@ -19,7 +19,6 @@ export interface MeUser {
   id: string;
   username: string;
   email?: string;
-  role?: string;
   groups?: string[];
   /** 展开后的权限码集合；含 * 即全权。授权判定以它为准。 */
   permissions?: string[];
@@ -120,9 +119,6 @@ export interface OAuthClientDraft {
 /** 实例设置是后端返回的键值补丁：键与类型都由接口决定，前端不维护字段清单。 */
 export type SettingsMap = Record<string, unknown>;
 
-/** 角色枚举取自 store/identity.go 的校验分支，名单外的值只会拿回 invalid_role。 */
-export const ADMIN_ROLES = ["user", "editor", "admin"] as const;
-
 /** 受支持的 scope，与 store.SupportedScopes 一致；界面只从这里出选项。 */
 export const OAUTH_SCOPES = ["openid", "profile", "email"] as const;
 
@@ -170,10 +166,6 @@ export function createAdminUser(input: { username: string; email?: string; passw
  * RoleToGroups 重建（admin → admin；editor → catalog_editor, member；其余 → member）。
  * 手工分配的权限组因此会被角色默认组覆盖——界面必须在提交前讲清这件事。
  */
-export function updateUserRole(userId: string, role: string): Promise<{ ok: boolean }> {
-  return sendJson<{ ok: boolean }>(`/api/admin/users/${encodeURIComponent(userId)}/role`, "PUT", { role });
-}
-
 /** 重置密码：服务端只认 12–72 位（store.ResetUserPassword）。 */
 export function resetUserPassword(userId: string, password: string): Promise<{ ok: boolean }> {
   return sendJson<{ ok: boolean }>(`/api/admin/users/${encodeURIComponent(userId)}/password`, "PUT", { password });
@@ -309,7 +301,7 @@ export interface AuditLogEntry {
   result?: string;
   error_code?: string;
   request_method?: string;
-  /** 路由模板（如 /api/admin/users/:id/role），不是原始路径。 */
+  /** 路由模板（如 /api/admin/users/:id），不是原始路径。 */
   route?: string;
   http_status?: number;
   request_id?: string;

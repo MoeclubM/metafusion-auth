@@ -244,10 +244,6 @@ function SettingsPanel() {
             <div className="text-text-strong break-all font-mono">{user?.id ?? "—"}</div>
           </div>
           <div className="space-y-0.5">
-            <div className="font-mono text-text-faint">{t("instance.identityRole")}</div>
-            <div className="text-text-strong font-mono">{user?.role ?? "—"}</div>
-          </div>
-          <div className="space-y-0.5">
             <div className="font-mono text-text-faint">{t("instance.identityGroups")}</div>
             <div className="flex flex-wrap gap-1">
               {(user?.groups ?? []).length === 0 ? (

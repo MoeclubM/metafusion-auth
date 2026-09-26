@@ -8,7 +8,7 @@ import (
 // （只验 aud/iss），仅凭载荷里的 role/permissions 也拿不到任何权限。
 func TestSignOAuthMinimizesThirdPartyIdentity(t *testing.T) {
 	iss := newIssuer(t, "https://findverse.cc/api", "metafusion")
-	admin := User{ID: "11111111-1111-1111-1111-111111111111", Username: "root", Email: "root@example.test", Role: "admin", Groups: []string{"admin"}, Permissions: []string{"*"}}
+	admin := User{ID: "11111111-1111-1111-1111-111111111111", Username: "root", Email: "root@example.test", Groups: []string{"admin"}, Permissions: []string{"*"}}
 
 	token, jti, _, err := iss.SignOAuth(admin, "third-party", []string{"profile"})
 	if err != nil {
@@ -33,9 +33,6 @@ func TestSignOAuthMinimizesThirdPartyIdentity(t *testing.T) {
 		t.Fatalf("audience = %q，期望平台受众", claims.Audience)
 	}
 	// 管理能力清零：role 恒为 user（防 Can 按 role 兜底），组与权限恒空。
-	if claims.Role != "user" {
-		t.Fatalf("role = %q，第三方令牌不得携带真实管理角色", claims.Role)
-	}
 	if len(claims.Groups) != 0 || len(claims.Permissions) != 0 {
 		t.Fatalf("组/权限未清零: %+v", claims)
 	}
@@ -61,7 +58,7 @@ func TestSignOAuthMinimizesThirdPartyIdentity(t *testing.T) {
 // scope 裁剪按授予集合走：email-only 拿得到邮箱、拿不到资料；openid-only 只剩 sub。
 func TestSignOAuthScopeSlicing(t *testing.T) {
 	iss := newIssuer(t, "https://findverse.cc/api", "metafusion")
-	u := User{ID: "22222222-2222-2222-2222-222222222222", Username: "kana", Email: "kana@example.test", Role: "admin"}
+	u := User{ID: "22222222-2222-2222-2222-222222222222", Username: "kana", Email: "kana@example.test"}
 
 	token, _, _, err := iss.SignOAuth(u, "third-party", []string{"email"})
 	if err != nil {
@@ -77,8 +74,8 @@ func TestSignOAuthScopeSlicing(t *testing.T) {
 	if claims.Username != "" {
 		t.Fatalf("未授予 profile 不得带 username=%q", claims.Username)
 	}
-	if claims.Role != "user" || len(claims.Permissions) != 0 {
-		t.Fatalf("email 令牌仍带管理身份: role=%q perms=%v", claims.Role, claims.Permissions)
+	if len(claims.Permissions) != 0 {
+		t.Fatalf("email 令牌仍带管理权限: perms=%v", claims.Permissions)
 	}
 
 	openid, _, _, err := iss.SignOAuth(u, "third-party", []string{"openid"})
@@ -97,7 +94,7 @@ func TestSignOAuthScopeSlicing(t *testing.T) {
 // 站内会话令牌不受影响：完整身份 + 用途标记 + 管理能力照常。
 func TestSessionTokenKeepsFullIdentity(t *testing.T) {
 	iss := newIssuer(t, "https://findverse.cc/api", "metafusion")
-	admin := User{ID: "33333333-3333-3333-3333-333333333333", Username: "root", Email: "root@example.test", Role: "admin", Groups: []string{"admin"}, Permissions: []string{"*"}}
+	admin := User{ID: "33333333-3333-3333-3333-333333333333", Username: "root", Email: "root@example.test", Groups: []string{"admin"}, Permissions: []string{"*"}}
 	token, _, _, err := iss.Sign(admin)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
@@ -109,7 +106,7 @@ func TestSessionTokenKeepsFullIdentity(t *testing.T) {
 	if claims.TokenUse != TokenUseSession {
 		t.Fatalf("token_use = %q，期望 session", claims.TokenUse)
 	}
-	if claims.Role != "admin" || claims.Email != admin.Email || len(claims.Permissions) != 1 {
+	if claims.Email != admin.Email || len(claims.Permissions) != 1 {
 		t.Fatalf("会话身份被收窄: %+v", claims)
 	}
 	if !Can(ClaimsToUser(claims), "auth.users.manage") {
@@ -119,7 +116,7 @@ func TestSessionTokenKeepsFullIdentity(t *testing.T) {
 
 // 未知用途取值直接拒收；历史令牌（无 token_use）仍按会话语义兼容。
 func TestTokenUseValidation(t *testing.T) {
-	for _, use := range []string{"", TokenUseSession, TokenUseOAuth, TokenUseIDToken} {
+	for _, use := range []string{TokenUseSession, TokenUseOAuth, TokenUseIDToken} {
 		if !validTokenUse(use) {
 			t.Fatalf("%q 应合法", use)
 		}
@@ -129,26 +126,24 @@ func TestTokenUseValidation(t *testing.T) {
 			t.Fatalf("%q 必须非法", use)
 		}
 	}
-	// 历史会话令牌（签发时还没有 token_use 字段）解码后用途为空，仍走 role 兜底。
-	legacy := &Claims{Subject: "u1", Role: "admin"}
-	if !Can(ClaimsToUser(legacy), "auth.users.manage") {
-		t.Fatal("历史令牌的兼容语义被破坏")
+	if validTokenUse("") {
+		t.Fatal("缺少 token_use 不得放行")
 	}
 }
 
 // 最小化构造是纯函数：兑换、回退、替身三处共用同一份判定，不各写一套。
 func TestOAuthTokenUserHelpers(t *testing.T) {
-	u := User{ID: "u1", Username: "kana", Email: "kana@example.test", Role: "admin", Groups: []string{"admin"}, Permissions: []string{"*"}}
+	u := User{ID: "u1", Username: "kana", Email: "kana@example.test", Groups: []string{"admin"}, Permissions: []string{"*"}}
 	min := OAuthTokenUser(u, []string{"profile"})
-	if min.ID != "u1" || min.Username != "kana" || min.Email != "" || min.Role != "user" || len(min.Permissions) != 0 || len(min.Groups) != 0 {
+	if min.ID != "u1" || min.Username != "kana" || min.Email != "" || len(min.Permissions) != 0 || len(min.Groups) != 0 {
 		t.Fatalf("OAuthTokenUser 收敛不符: %+v", min)
 	}
 	id := IDTokenUser(u, []string{"openid", "profile", "email"})
-	if id.Username != "kana" || id.Email != u.Email || id.Role != "admin" || len(id.Permissions) != 0 {
+	if id.Username != "kana" || id.Email != u.Email || len(id.Permissions) != 0 {
 		t.Fatalf("IDTokenUser 应与 userinfo 同口径: %+v", id)
 	}
 	bare := IDTokenUser(u, []string{"openid"})
-	if bare.Username != "" || bare.Email != "" || bare.Role != "user" {
+	if bare.Username != "" || bare.Email != "" {
 		t.Fatalf("openid-only id_token 只应剩 sub: %+v", bare)
 	}
 }

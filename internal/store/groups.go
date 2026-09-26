@@ -246,42 +246,8 @@ func (s *Store) SetUserGroups(ctx context.Context, userID string, codes []string
 				return err
 			}
 		}
-		// role 是历史兼容字段：按组成员关系推导，让还没接入权限码的旧代码继续可用。
-		return syncRoleFromGroups(ctx, tx, userID)
+		return nil
 	})
-}
-
-// syncRoleFromGroups 依据组成员关系回写 users.role（admin > editor > user）。
-func syncRoleFromGroups(ctx context.Context, tx *sql.Tx, userID string) error {
-	role := "user"
-	var codes []string
-	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(array_agg(g.code), '{}') FROM auth.groups g JOIN auth.user_groups ug ON ug.group_id=g.id WHERE ug.user_id=$1", userID).Scan(pq.Array(&codes)); err != nil {
-		return err
-	}
-	for _, c := range codes {
-		switch c {
-		case "admin":
-			role = "admin"
-		case "catalog_editor", "catalog_admin":
-			if role != "admin" {
-				role = "editor"
-			}
-		}
-	}
-	_, err := tx.ExecContext(ctx, "UPDATE auth.users SET role=$1 WHERE id=$2", role, userID)
-	return err
-}
-
-// RoleToGroups 是历史角色的等价组：管理台改角色时同步成员关系，两边不脱节。
-func RoleToGroups(role string) []string {
-	switch role {
-	case "admin":
-		return []string{"admin"}
-	case "editor":
-		return []string{"catalog_editor", "member"}
-	default:
-		return []string{"member"}
-	}
 }
 
 // nullableActor 把可空的授权人转成 SQL NULL：setup 建立首个管理员时没有 actor。
@@ -422,7 +388,7 @@ func (s *Store) Register(ctx context.Context, username, email, password, inviteC
 	if enabled, _ := settings[SettingRegistrationEnabled].(bool); !enabled {
 		return User{}, "", fmt.Errorf("registration_closed")
 	}
-	u := User{ID: uuid.NewString(), Username: strings.TrimSpace(username), Email: strings.TrimSpace(email), Role: "user"}
+	u := User{ID: uuid.NewString(), Username: strings.TrimSpace(username), Email: strings.TrimSpace(email)}
 	if u.Email == "" {
 		u.Email = fmt.Sprintf("%s@findverse.cc", u.Username)
 	}
@@ -452,7 +418,7 @@ func (s *Store) Register(ctx context.Context, username, email, password, inviteC
 		// 预检只是"友好路径"：两个并发注册可能同时通过它，唯一索引 users_username_key 才是
 		// 最终裁判。ON CONFLICT + RowsAffected 让竞态落败方拿到与预检相同的稳定码，而不是把
 		// "pq: duplicate key ... users_username_key" 交给注册页（2026-09-19 第二轮架构报告 #9/#15）。
-		res, err := tx.ExecContext(ctx, "INSERT INTO auth.users(id,username,email,password_hash,role) VALUES($1,$2,$3,$4,$5) ON CONFLICT (username) DO NOTHING", u.ID, u.Username, u.Email, string(hash), u.Role)
+		res, err := tx.ExecContext(ctx, "INSERT INTO auth.users(id,username,email,password_hash) VALUES($1,$2,$3,$4) ON CONFLICT (username) DO NOTHING", u.ID, u.Username, u.Email, string(hash))
 		if err != nil {
 			return err
 		}
@@ -496,7 +462,7 @@ func (s *Store) InvitedMembers(ctx context.Context, actor *User) ([]User, error)
 	if actor == nil {
 		return nil, fmt.Errorf("forbidden")
 	}
-	rows, err := s.DB.QueryContext(ctx, "SELECT u.id,u.username,COALESCE(u.email,''),u.role FROM auth.invite_uses iu JOIN auth.invites i ON i.code=iu.invite_code JOIN auth.users u ON u.id=iu.user_id WHERE i.created_by=$1 ORDER BY iu.used_at DESC LIMIT 100", actor.ID)
+	rows, err := s.DB.QueryContext(ctx, "SELECT u.id,u.username,COALESCE(u.email,'') FROM auth.invite_uses iu JOIN auth.invites i ON i.code=iu.invite_code JOIN auth.users u ON u.id=iu.user_id WHERE i.created_by=$1 ORDER BY iu.used_at DESC LIMIT 100", actor.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -504,7 +470,7 @@ func (s *Store) InvitedMembers(ctx context.Context, actor *User) ([]User, error)
 	out := []User{}
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.Role); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email); err != nil {
 			return nil, err
 		}
 		out = append(out, u)

@@ -13,6 +13,7 @@ import { can, canEnterAdmin, SECTION_PERMISSIONS, type SectionKey } from "@/lib/
 import { logout } from "@/lib/endpoints";
 import { stripBasePath } from "@/lib/paths";
 import { LocaleSwitcher } from "./LocaleSwitcher";
+import { ThemeModeSwitcher } from "./ThemeModeSwitcher";
 import { ErrorNotice, ForbiddenBlock, LoadingBlock } from "./ui/blocks";
 
 const NAV_GROUPS: { labelKey: string; items: { key: SectionKey; href: string; icon: React.ReactNode }[] }[] = [
@@ -50,28 +51,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-text-strong">
-      <header className="border-b border-line-subtle bg-surface/90 backdrop-blur sticky top-0 z-40">
-        <div className="max-w-page mx-auto px-4 sm:px-6 min-h-16 flex flex-wrap items-center gap-3 py-2">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-control bg-primary/10 text-primary"><ShieldCheck className="h-5 w-5" /></span>
-            <div className="min-w-0">
-              <div className="text-sm font-semibold text-text-strong truncate">{t("app.title")}</div>
-              <div className="text-[11px] text-text-muted truncate">{t("app.subtitle")}</div>
-            </div>
+      <header className="sticky top-0 z-30 border-b border-line bg-surface/90 backdrop-blur">
+        <div className="mx-auto flex h-14 w-full max-w-page items-center justify-between gap-3 px-4 sm:px-6">
+          <div className="flex min-w-0 items-center gap-3">
+            <a href="/admin" className="inline-flex shrink-0 items-center gap-1 text-xs text-text-muted hover:text-text-strong"><ArrowLeft className="h-4 w-4" />{t("app.backToHub")}</a>
+            <span className="text-text-faint">/</span>
+            <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-text-strong"><ShieldCheck className="h-4 w-4 shrink-0 text-primary" /><span className="truncate">{t("app.title")}</span></div>
           </div>
-          <div className="ml-auto flex flex-wrap items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             <LocaleSwitcher />
-            <a href="/admin" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-control border border-line text-xs text-text-body hover:bg-surfaceHover">
-              <ArrowLeft className="h-4 w-4" aria-hidden="true" />{t("app.backToHub")}
-            </a>
-            {user ? (
-              <>
-                <span className="hidden max-w-[9rem] truncate text-xs text-text-muted sm:inline" title={user.username}>{user.username}</span>
-                <button type="button" onClick={() => void handleLogout()} disabled={signingOut} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-control border border-line text-xs text-text-body hover:bg-surfaceHover disabled:opacity-50">
-                  <LogOut className="h-4 w-4" aria-hidden="true" />{t("session.logout")}
-                </button>
-              </>
-            ) : null}
+            <ThemeModeSwitcher />
+            {user ? <span className="hidden max-w-[9rem] truncate rounded border border-primary/30 bg-primary/20 px-2 py-0.5 font-mono text-xs text-primary sm:inline-flex" title={user.username}>{user.username}</span> : null}
           </div>
         </div>
       </header>
@@ -88,6 +78,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   </optgroup>
                 ))}
               </select>
+              {user ? <button type="button" onClick={() => void handleLogout()} disabled={signingOut} className="mt-3 inline-flex items-center gap-2 text-xs text-text-muted disabled:opacity-50"><LogOut className="h-4 w-4" />{t("session.logout")}</button> : null}
             </div>
             <nav aria-label={t("nav.section")} className="hidden lg:block sticky top-24 rounded-card border border-line-subtle bg-surfaceSubtle p-2">
               {visibleGroups.map((group) => (
@@ -101,6 +92,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   })}
                 </div>
               ))}
+              {user ? <button type="button" onClick={() => void handleLogout()} disabled={signingOut} className="mt-2 flex w-full items-center gap-3 border-t border-line-subtle px-3 py-3 text-left text-xs text-text-muted hover:text-text-strong disabled:opacity-50"><LogOut className="h-4 w-4" />{t("session.logout")}</button> : null}
             </nav>
           </aside>
         ) : null}

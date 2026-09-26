@@ -19,7 +19,6 @@ var frozenTableDefs = map[string]map[string]string{
 		"username":      "username text not null unique",
 		"email":         "email text not null default ''",
 		"password_hash": "password_hash text not null",
-		"role":          "role text not null check (role in ('user','editor','admin'))",
 		// 2026-09-16：账号封禁能力新增的列。默认 false，既有实例升级后行为不变；
 		// 冻结它是因为登录、续期、验签三处都读它，改错只在线上以"封了还能进"暴露。
 		"banned": "banned boolean not null default false",

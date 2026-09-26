@@ -108,7 +108,7 @@ func decodeJSON(t *testing.T, body []byte, v any) {
 func TestAuthorizationCodeChainWithConsent(t *testing.T) {
 	r, s, fake := newOAuthTestServer(t)
 	fake.addClient("third-party", "示例第三方站点", []string{chainCallback}, []string{"openid", "profile", "email"}, false, "s3cret-value")
-	user := store.User{ID: "11111111-1111-1111-1111-111111111111", Username: "kana", Email: "kana@example.test", Role: "user"}
+	user := store.User{ID: "11111111-1111-1111-1111-111111111111", Username: "kana", Email: "kana@example.test"}
 	fake.addUser(user)
 	bearer := signBearer(t, s, user)
 	authQuery := "client_id=third-party&redirect_uri=" + url.QueryEscape(chainCallback) +
@@ -182,10 +182,9 @@ func TestAuthorizationCodeChainWithConsent(t *testing.T) {
 		ID       string `json:"id"`
 		Username string `json:"username"`
 		Email    string `json:"email"`
-		Role     string `json:"role"`
 	}
 	decodeJSON(t, w.Body.Bytes(), &info)
-	if info.Sub != user.ID || info.ID != user.ID || info.Username != "kana" || info.Email != "kana@example.test" || info.Role != "user" {
+	if info.Sub != user.ID || info.ID != user.ID || info.Username != "kana" || info.Email != "kana@example.test" {
 		t.Fatalf("userinfo 内容不符: %+v", info)
 	}
 
@@ -200,7 +199,7 @@ func TestAuthorizationCodeChainWithConsent(t *testing.T) {
 func TestTrustedClientSkipsConsentPage(t *testing.T) {
 	r, s, fake := newOAuthTestServer(t)
 	fake.addClient("metafusion-forum", "MetaFusion 社区论坛", []string{chainCallback}, []string{"profile"}, true, "")
-	user := store.User{ID: "22222222-2222-2222-2222-222222222222", Username: "member", Role: "user"}
+	user := store.User{ID: "22222222-2222-2222-2222-222222222222", Username: "member"}
 	fake.addUser(user)
 	bearer := signBearer(t, s, user)
 
@@ -221,7 +220,7 @@ func TestTrustedClientSkipsConsentPage(t *testing.T) {
 func TestConsentDeniedReturnsAccessDenied(t *testing.T) {
 	r, s, fake := newOAuthTestServer(t)
 	fake.addClient("third-party", "示例第三方站点", []string{chainCallback}, []string{"openid", "profile"}, false, "s3cret-value")
-	user := store.User{ID: "33333333-3333-3333-3333-333333333333", Username: "kana", Role: "user"}
+	user := store.User{ID: "33333333-3333-3333-3333-333333333333", Username: "kana"}
 	fake.addUser(user)
 	bearer := signBearer(t, s, user)
 
@@ -250,7 +249,7 @@ func TestScopeConvergenceOnAuthorization(t *testing.T) {
 	r, s, fake := newOAuthTestServer(t)
 	fake.addClient("third-party", "示例第三方站点", []string{chainCallback}, []string{"openid", "profile"}, false, "s3cret-value")
 	fake.addClient("email-only", "只要邮箱的站点", []string{chainCallback}, []string{"email"}, false, "s3cret-value")
-	user := store.User{ID: "44444444-4444-4444-4444-444444444444", Username: "kana", Role: "user"}
+	user := store.User{ID: "44444444-4444-4444-4444-444444444444", Username: "kana"}
 	fake.addUser(user)
 	bearer := signBearer(t, s, user)
 
@@ -285,7 +284,7 @@ func TestScopeConvergenceOnAuthorization(t *testing.T) {
 func TestPKCEAndRedirectGuards(t *testing.T) {
 	r, s, fake := newOAuthTestServer(t)
 	fake.addClient("third-party", "示例第三方站点", []string{chainCallback}, []string{"openid", "profile"}, false, "s3cret-value")
-	user := store.User{ID: "55555555-5555-5555-5555-555555555555", Username: "kana", Role: "user"}
+	user := store.User{ID: "55555555-5555-5555-5555-555555555555", Username: "kana"}
 	fake.addUser(user)
 	bearer := signBearer(t, s, user)
 
@@ -352,7 +351,7 @@ func TestAuthorizeRedirectsAnonymousToLogin(t *testing.T) {
 func TestConsentPageLanguageAndEscaping(t *testing.T) {
 	r, s, fake := newOAuthTestServer(t)
 	fake.addClient("third-party", `可疑站点 <script>alert(1)</script>`, []string{chainCallback}, []string{"email"}, false, "s3cret-value")
-	user := store.User{ID: "66666666-6666-6666-6666-666666666666", Username: "kana", Role: "user"}
+	user := store.User{ID: "66666666-6666-6666-6666-666666666666", Username: "kana"}
 	fake.addUser(user)
 	bearer := signBearer(t, s, user)
 
@@ -414,7 +413,7 @@ func TestConsentTextsCoverSupportedScopes(t *testing.T) {
 func TestConsentPageMarksUnverifiedApp(t *testing.T) {
 	r, s, fake := newOAuthTestServer(t)
 	fake.addClient("third-party", "未核验站点", []string{chainCallback}, []string{"openid"}, false, "s3cret-value")
-	user := store.User{ID: "77777777-7777-7777-7777-777777777777", Username: "kana", Role: "user"}
+	user := store.User{ID: "77777777-7777-7777-7777-777777777777", Username: "kana"}
 	fake.addUser(user)
 	bearer := signBearer(t, s, user)
 	query := "client_id=third-party&redirect_uri=" + url.QueryEscape(chainCallback) + "&response_type=code&scope=openid"

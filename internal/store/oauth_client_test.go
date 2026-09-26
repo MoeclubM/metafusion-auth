@@ -114,19 +114,19 @@ func TestCanManageOAuth(t *testing.T) {
 	if canManageOAuth(nil) {
 		t.Fatal("匿名不能管理客户端")
 	}
-	if canManageOAuth(&User{ID: "u1", Role: "user", Permissions: []string{"community.post.create"}}) {
+	if canManageOAuth(&User{ID: "u1", Permissions: []string{"community.post.create"}}) {
 		t.Fatal("无 auth.oauth.manage 的成员不能管理客户端")
 	}
-	if !canManageOAuth(&User{ID: "u1", Role: "user", Permissions: []string{"auth.oauth.manage"}}) {
+	if !canManageOAuth(&User{ID: "u1", Permissions: []string{"auth.oauth.manage"}}) {
 		t.Fatal("持有 auth.oauth.manage 应可管理")
 	}
-	if !canManageOAuth(&User{ID: "u1", Role: "user", Permissions: []string{"*"}}) {
+	if !canManageOAuth(&User{ID: "u1", Permissions: []string{"*"}}) {
 		t.Fatal("* 通配应可管理")
 	}
-	if !canManageOAuth(&User{ID: "u1", Role: "admin"}) {
-		t.Fatal("历史 role=admin（老令牌不带 permissions 声明）应可管理")
+	if canManageOAuth(&User{ID: "u1"}) {
+		t.Fatal("空权限账号不能管理客户端")
 	}
-	if canManageOAuth(&User{ID: "u1", Role: "admin", Permissions: []string{"community.post.create"}}) {
+	if canManageOAuth(&User{ID: "u1", Permissions: []string{"community.post.create"}}) {
 		t.Fatal("带 permissions 声明的令牌只认码：role=admin 不再额外放行")
 	}
 }

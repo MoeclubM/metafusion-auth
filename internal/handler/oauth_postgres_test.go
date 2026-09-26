@@ -219,8 +219,15 @@ func insertChainUser(t *testing.T, ctx context.Context, st *store.Store, role st
 	if err != nil {
 		t.Fatalf("哈希测试口令: %v", err)
 	}
-	if _, err := st.DB.ExecContext(ctx, "INSERT INTO auth.users(id,username,email,password_hash,role) VALUES($1,$2,$3,$4,$5)", id, name, name+"@example.test", string(hash), role); err != nil {
+	if _, err := st.DB.ExecContext(ctx, "INSERT INTO auth.users(id,username,email,password_hash) VALUES($1,$2,$3,$4)", id, name, name+"@example.test", string(hash)); err != nil {
 		t.Fatalf("插入测试账号: %v", err)
+	}
+	groupCode := "member"
+	if role == "admin" {
+		groupCode = "admin"
+	}
+	if _, err := st.DB.ExecContext(ctx, "INSERT INTO auth.user_groups(user_id,group_id) SELECT $1,id FROM auth.groups WHERE code=$2", id, groupCode); err != nil {
+		t.Fatalf("分配测试权限组: %v", err)
 	}
 	t.Cleanup(func() { testutil.DeleteUser(t, st.DB, id) })
 	token, _, err := st.Login(ctx, name, chainTestPassword)

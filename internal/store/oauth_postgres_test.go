@@ -36,8 +36,8 @@ func TestOAuthServerAgainstPostgres(t *testing.T) {
 
 	const callback = "https://client.example/auth/callback"
 	userID := seedOAuthTestUser(t, ctx, s)
-	admin := &User{ID: userID, Username: "oauth-admin", Role: "admin"}
-	member := &User{ID: userID, Username: "oauth-member", Role: "user"}
+	admin := &User{ID: userID, Username: "oauth-admin"}
+	member := &User{ID: userID, Username: "oauth-member"}
 	clientID := "mfc-test-" + strings.ReplaceAll(newUUID(), "-", "")[:12]
 	// 轮换后的当前密钥：轮换接口只返回一次明文，这里存下来给后面的换码用。
 	currentSecret := ""
@@ -277,7 +277,7 @@ func seedOAuthTestUser(t *testing.T, ctx context.Context, s *Store) string {
 	if err != nil {
 		t.Fatalf("哈希测试口令: %v", err)
 	}
-	if _, err := s.DB.ExecContext(ctx, "INSERT INTO auth.users(id,username,email,password_hash,role) VALUES($1,$2,$3,$4,'user')", id, name, name+"@example.test", string(hash)); err != nil {
+	if _, err := s.DB.ExecContext(ctx, "INSERT INTO auth.users(id,username,email,password_hash) VALUES($1,$2,$3,$4)", id, name, name+"@example.test", string(hash)); err != nil {
 		t.Fatalf("插入测试账号: %v", err)
 	}
 	t.Cleanup(func() { testutil.DeleteUser(t, s.DB, id) })

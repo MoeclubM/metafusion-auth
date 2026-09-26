@@ -105,25 +105,18 @@ func HasPermission(perms []string, code string) bool {
 
 // Can 报告身份是否持有权限码，是账号服务里唯一的授权断言（HTTP 闸门与 store 复核共用）。
 //
-// 令牌带 permissions 时一律以码为准（含 * 通配），此时角色不再额外放行——否则
-// "角色兜底"会变成绕过权限组的后门，或反过来让同一个管理动作在两个层次得到不同答案。
-// 只有完全没有 permissions 声明时（老令牌，或尚未按权限组配置的实例）才按历史 role
-// 兜底到 admin。与主仓库 catalog.User.Can 同口径（那边另有 editor 兜底实体编辑）。
+// 只按 permissions 判定（含 * 通配），与主仓库 catalog.User.Can 同口径。
 func Can(u *User, code string) bool {
 	if u == nil {
 		return false
 	}
 	// 第三方 OAuth 令牌永不直接授权（S01）：它只证明"用户把部分身份展示给了某应用"，
-	// 不携带任何业务权限。即使 permissions 为空且 role 为 admin（历史签发残留），
-	// 也必须拒绝——显式空权限不得回落到角色兜底。下游同样只能用
+	// 不携带任何业务权限。下游同样只能用
 	// HasPermission(principal.Permissions, code) 语义判定这类身份。
 	if u.IsThirdParty() {
 		return false
 	}
-	if len(u.Permissions) > 0 {
-		return HasPermission(u.Permissions, code)
-	}
-	return u.Role == "admin"
+	return HasPermission(u.Permissions, code)
 }
 
 // ── 实例设置 ──

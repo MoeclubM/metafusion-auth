@@ -122,9 +122,9 @@ func TestAuditLogCoversAccountMutationsAgainstPostgres(t *testing.T) {
 	memberID, memberName, memberBearer := insertChainUser(t, ctx, st, "user")
 	// 自助邀请码端点要求 auth.invites.manage：给这个成员签一张带该码的令牌（
 	// requireUser 只要求登录，权限判定在 store 里按码走）。
-	inviteBearer := signBearer(t, st, store.User{ID: memberID, Username: memberName, Role: "user", Permissions: []string{"auth.invites.manage"}})
+	inviteBearer := signBearer(t, st, store.User{ID: memberID, Username: memberName, Permissions: []string{"auth.invites.manage"}})
 	// PAT 的 scope 必须是"账号现时权限 ∩ 请求"：这张令牌带上成员真正持有的码。
-	patBearer := signBearer(t, st, store.User{ID: memberID, Username: memberName, Role: "user", Permissions: []string{"community.post.create"}})
+	patBearer := signBearer(t, st, store.User{ID: memberID, Username: memberName, Permissions: []string{"community.post.create"}})
 
 	const resetPassword = "Rotated-Passw0rd!"
 	const selfPassword = "Self-Changed-Passw0rd!"
@@ -141,8 +141,7 @@ func TestAuditLogCoversAccountMutationsAgainstPostgres(t *testing.T) {
 		wantStatus int
 		wantAction string
 	}{
-		{"改角色", http.MethodPut, "/api/admin/users/" + targetID + "/role", adminBearer, "{\"role\":\"editor\"}", 200, "user.role_changed"},
-		{"改权限组", http.MethodPut, "/api/admin/users/" + targetID + "/groups", adminBearer, "{\"groups\":[\"member\"]}", 200, "user.groups_changed"},
+		{"改权限组", http.MethodPut, "/api/admin/users/" + targetID + "/groups", adminBearer, "{\"groups\":[\"member\",\"catalog_editor\"]}", 200, "user.groups_changed"},
 		{"重置口令", http.MethodPut, "/api/admin/users/" + targetID + "/password", adminBearer, "{\"password\":\"" + resetPassword + "\"}", 200, "user.password_reset"},
 		{"封禁", http.MethodPut, "/api/admin/users/" + targetID + "/ban", adminBearer, "{\"banned\":true}", 200, "user.banned"},
 		{"解封", http.MethodPut, "/api/admin/users/" + targetID + "/ban", adminBearer, "{\"banned\":false}", 200, "user.unbanned"},
@@ -291,7 +290,7 @@ func TestAuditLogCoversAccountMutationsAgainstPostgres(t *testing.T) {
 	}{
 		{"非法载荷", http.MethodPut, "/api/admin/users/" + targetID + "/ban", adminBearer, "{}", 400, "user.banned", "invalid_payload"},
 		{"缺权限", http.MethodPut, "/api/admin/settings", memberBearer, "{\"registration_enabled\":false}", 403, "settings.updated", "forbidden"},
-		{"匿名", http.MethodPut, "/api/admin/users/" + targetID + "/role", "", "{\"role\":\"user\"}", 401, "user.role_changed", "authentication_required"},
+		{"匿名", http.MethodPut, "/api/admin/users/" + targetID + "/groups", "", "{\"groups\":[\"member\"]}", 401, "user.groups_changed", "authentication_required"},
 	}
 	for _, tc := range failCases {
 		requestID := auditRequestIDPrefix + "fail-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8]

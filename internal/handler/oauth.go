@@ -162,7 +162,7 @@ func (h *Handler) registerOAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		}
 		// S01：token 响应的 user 与 access_token 自身都可被第三方直接读取，
 		// 因此与 userinfo 同口径裁剪（未授予 email 不得见 email，未授予 profile
-		// 不得见 username；role 恒为最小值，不向第三方暴露真实管理角色）。
+		// 不得见 username；不向第三方暴露管理权限）。
 		granted := store.SplitScopes(grant.Scope)
 		scopedUser := store.OAuthTokenUser(*grant.User, granted)
 		resp := gin.H{
@@ -209,23 +209,18 @@ func (h *Handler) registerOAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 // 否则"同意页说只给 A、实际给了 A+B"，用户给出的同意就是失效的（2026-09-19 审计 S-10）。
 //
 //   - sub / id 恒回：第三方需要一个稳定的用户标识，也是 OIDC 的 subject；
-//   - profile → username / role（账号的公开资料）；
+//   - profile → username（账号的公开资料）；
 //   - email   → email。
-//
-// scope 为空串是**会话令牌**的兼容分支（见 store.OAuthUserinfo 的注释）：那是用户自己的令牌、
-// 不经过第三方同意流程，保持全字段以便排障；第三方令牌一定带着它被授予的 scope。
 func userinfoFields(u *store.User, scope string) map[string]any {
 	granted := map[string]bool{}
 	for _, code := range strings.Fields(scope) {
 		granted[code] = true
 	}
-	session := len(granted) == 0
 	out := map[string]any{"sub": u.ID, "id": u.ID}
-	if session || granted["profile"] {
+	if granted["profile"] {
 		out["username"] = u.Username
-		out["role"] = u.Role
 	}
-	if session || granted["email"] {
+	if granted["email"] {
 		out["email"] = u.Email
 	}
 	return out
@@ -255,7 +250,7 @@ func (h *Handler) discovery(c *gin.Context) {
 		"id_token_signing_alg_values_supported": []string{"RS256"},
 		"scopes_supported":                      store.SupportedScopes,
 		"code_challenge_methods_supported":      []string{"S256", "plain"},
-		"claims_supported":                      []string{"sub", "preferred_username", "email", "role"},
+		"claims_supported":                      []string{"sub", "preferred_username", "email"},
 	})
 }
 

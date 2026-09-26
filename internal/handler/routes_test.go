@@ -71,7 +71,6 @@ var frozenRoutes = []string{
 	"PUT /api/admin/users/:id/groups",
 	"PUT /api/admin/users/:id/password",
 	"PUT /api/admin/users/:id/ban",
-	"PUT /api/admin/users/:id/role",
 	"PUT /api/developer/apps/:id",
 	"PUT /api/auth/password",
 	"PUT /api/auth/profile",

@@ -40,7 +40,7 @@ func TestAccessRoutesExistAndEnforceAuth(t *testing.T) {
 	}
 
 	// 权限组模型下不再"role==admin 一刀切"：普通成员访问管理端点必须 403。
-	member := store.User{ID: "22222222-2222-2222-2222-222222222222", Username: "member", Role: "user", Groups: []string{"member"}, Permissions: []string{"community.post.create"}}
+	member := store.User{ID: "22222222-2222-2222-2222-222222222222", Username: "member", Groups: []string{"member"}, Permissions: []string{"community.post.create"}}
 	memberToken, _, _, err := s.Tokens.Sign(member)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
@@ -51,7 +51,7 @@ func TestAccessRoutesExistAndEnforceAuth(t *testing.T) {
 		}
 	}
 	// 持有对应权限码的自定义组应当通过闸门（/admin/permissions 是纯内存端点，不依赖数据库）。
-	manager := store.User{ID: "33333333-3333-3333-3333-333333333333", Username: "ops", Role: "user", Groups: []string{"custom_ops"}, Permissions: []string{"auth.groups.manage"}}
+	manager := store.User{ID: "33333333-3333-3333-3333-333333333333", Username: "ops", Groups: []string{"custom_ops"}, Permissions: []string{"auth.groups.manage"}}
 	managerToken, _, _, err := s.Tokens.Sign(manager)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
@@ -99,9 +99,9 @@ func TestAdminGateIsScopedToTheExactCode(t *testing.T) {
 	}
 	// 各持一个账号域码的成员：只应放行自己那一域。
 	scoped := []store.User{
-		{ID: "44444444-4444-4444-4444-444444444444", Username: "inviter", Role: "user", Permissions: []string{"auth.invites.manage"}},
-		{ID: "55555555-5555-5555-5555-555555555555", Username: "userops", Role: "user", Permissions: []string{"auth.users.manage"}},
-		{ID: "66666666-6666-6666-6666-666666666666", Username: "editor", Role: "editor", Permissions: []string{"catalog.entity.edit"}},
+		{ID: "44444444-4444-4444-4444-444444444444", Username: "inviter", Permissions: []string{"auth.invites.manage"}},
+		{ID: "55555555-5555-5555-5555-555555555555", Username: "userops", Permissions: []string{"auth.users.manage"}},
+		{ID: "66666666-6666-6666-6666-666666666666", Username: "editor", Permissions: []string{"catalog.entity.edit"}},
 	}
 	others := []struct{ method, path, needs string }{
 		{http.MethodGet, "/api/admin/permissions", "auth.groups.manage"},
@@ -117,15 +117,15 @@ func TestAdminGateIsScopedToTheExactCode(t *testing.T) {
 		}
 	}
 	// 本域仍放行：持 auth.groups.manage 读权限码清单。
-	groupsOps := sign(store.User{ID: "77777777-7777-7777-7777-777777777777", Username: "groupops", Role: "user", Permissions: []string{"auth.groups.manage"}})
+	groupsOps := sign(store.User{ID: "77777777-7777-7777-7777-777777777777", Username: "groupops", Permissions: []string{"auth.groups.manage"}})
 	if w := do(t, r, http.MethodGet, "/api/admin/permissions", groupsOps); w.Code != http.StatusOK {
 		t.Errorf("持 auth.groups.manage 应可读权限码清单，实际 %d", w.Code)
 	}
-	// 老令牌（完全没有 permissions 声明）仍按历史 role=admin 兜底，管理台不会因此锁死。
-	legacy := sign(store.User{ID: "88888888-8888-8888-8888-888888888888", Username: "legacy-root", Role: "admin"})
+	// 缺少权限码的身份不能访问管理端点。
+	withoutPermissions := sign(store.User{ID: "88888888-8888-8888-8888-888888888888", Username: "unprivileged"})
 	for _, p := range []string{"/api/admin/permissions", "/api/admin/settings"} {
-		if w := do(t, r, http.MethodGet, p, legacy); w.Code != http.StatusOK {
-			t.Errorf("老令牌 role=admin 访问 %s 应 200，实际 %d", p, w.Code)
+		if w := do(t, r, http.MethodGet, p, withoutPermissions); w.Code != http.StatusForbidden {
+			t.Errorf("无权限码访问 %s 应 403，实际 %d", p, w.Code)
 		}
 	}
 }

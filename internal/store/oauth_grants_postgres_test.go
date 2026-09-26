@@ -32,11 +32,11 @@ func TestOAuthGrantsAgainstPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("建管理员: %v", err)
 	}
-	owner, err := s.CreateUserWithRole(ctx, "grant-owner", "", pwd, false, "user", &admin)
+	owner, err := s.CreateUser(ctx, "grant-owner", "", pwd, false, &admin)
 	if err != nil {
 		t.Fatalf("建授权人: %v", err)
 	}
-	other, err := s.CreateUserWithRole(ctx, "grant-other", "", pwd, false, "user", &admin)
+	other, err := s.CreateUser(ctx, "grant-other", "", pwd, false, &admin)
 	if err != nil {
 		t.Fatalf("建另一个人: %v", err)
 	}

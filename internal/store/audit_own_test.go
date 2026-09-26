@@ -29,7 +29,7 @@ func TestListOwnAppAuditsAgainstPostgres(t *testing.T) {
 	mkUser := func(name string) string {
 		t.Helper()
 		id := uuid.NewString()
-		if _, err := s.DB.ExecContext(ctx, "INSERT INTO auth.users(id,username,email,password_hash,role) VALUES($1,$2,$3,$4,'user')", id, name, name+"@example.test", "test-hash"); err != nil {
+		if _, err := s.DB.ExecContext(ctx, "INSERT INTO auth.users(id,username,email,password_hash) VALUES($1,$2,$3,$4)", id, name, name+"@example.test", "test-hash"); err != nil {
 			t.Fatalf("插入测试账号: %v", err)
 		}
 		t.Cleanup(func() { testutil.DeleteUser(t, s.DB, id) })

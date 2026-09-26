@@ -31,7 +31,7 @@ func TestBanLifecycleAgainstPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("建管理员: %v", err)
 	}
-	member, err := s.CreateUserWithRole(ctx, "ban-member", "", pwd, false, "user", &admin)
+	member, err := s.CreateUser(ctx, "ban-member", "", pwd, false, &admin)
 	if err != nil {
 		t.Fatalf("建成员: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestBanGuardsAgainstPostgres(t *testing.T) {
 		t.Fatalf("不存在的账号应 user_not_found，实际 %v", err)
 	}
 	// 成员没有 users.manage 时一律 forbidden（即便目标是别人）。
-	member, err := s.CreateUserWithRole(ctx, "guard-member", "", pwd, false, "user", &admin)
+	member, err := s.CreateUser(ctx, "guard-member", "", pwd, false, &admin)
 	if err != nil {
 		t.Fatalf("建成员: %v", err)
 	}
@@ -141,9 +141,12 @@ func TestBanGuardsAgainstPostgres(t *testing.T) {
 		t.Fatalf("无权限应 forbidden，实际 %v", err)
 	}
 
-	second, err := s.CreateUserWithRole(ctx, "guard-admin2", "", pwd, false, "admin", ops)
+	second, err := s.CreateUser(ctx, "guard-admin2", "", pwd, false, ops)
 	if err != nil {
 		t.Fatalf("建第二个管理员: %v", err)
+	}
+	if err := s.SetUserGroups(ctx, second.ID, []string{"admin"}, ops); err != nil {
+		t.Fatalf("授予第二个管理员权限组: %v", err)
 	}
 	if _, err := s.SetUserBanned(ctx, admin.ID, true, ops); err != nil {
 		t.Fatalf("有两个管理员时应能封其中一个: %v", err)

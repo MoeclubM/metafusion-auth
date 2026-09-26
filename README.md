@@ -25,7 +25,7 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 | GET | `/api/auth/me` | 令牌 | 当前账号 |
 | POST | `/api/auth/logout` | 令牌 | 注销当前会话并清 Cookie |
 | GET | `/api/auth/settings` | 匿名 | 实例准入能力：注册/邀请等设置的**持久化结果**（不是代码常量）；`require_email_verification` 恒为 false（邮件通道未接入） |
-| GET | `/api/users/:id` | 匿名 | 公开账号资料（前端用户主页）：`user` 给 `id`/`username`/`role`（被 ban 时带 `banned:true`），`stats.invited_count` 为该用户邀请成功的人数。`email` **只在请求者就是本人时**出现；非 uuid 或不存在的 id 一律 404 `not_found` |
+| GET | `/api/users/:id` | 匿名 | 公开账号资料（前端用户主页）：`user` 给 `id`/`username`（被 ban 时带 `banned:true`），`stats.invited_count` 为该用户邀请成功的人数。`email` **只在请求者就是本人时**出现；非 uuid 或不存在的 id 一律 404 `not_found` |
 | GET/POST | `/api/auth/invite` | 令牌 | 个人邀请页：我的邀请码台账与由我邀请进来的人（`items`/`members`/`can_create`）/ 新建邀请码（`note`/`max_uses`/`expires_in_days`） |
 | PUT | `/api/auth/password` | 令牌 | 修改自己的密码（`old_password`/`new_password`） |
 | POST | `/api/auth/logout-all` | 令牌 | 吊销该用户全部会话 |
@@ -33,9 +33,9 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 | DELETE | `/api/auth/oauth-grants/{client_id}` | 令牌 | 撤回**我自己**对该应用的授权（删未过期令牌与未兑换授权码，回 `{"ok":true,"revoked":N}`；只作用于本人） |
 | GET/POST | `/api/auth/tokens` | 令牌 | 个人访问令牌（PAT）：列出**本人**的令牌 / 创建（`201` 回明文 + 元数据，明文只此一次），见「个人访问令牌」 |
 | DELETE | `/api/auth/tokens/{id}` | 令牌 | 吊销本人的 PAT（写 `revoked_at`，不删行；幂等） |
-| POST | `/api/auth/tokens/introspect` | **无** | 内省：下游服务凭明文换 `{valid,user_id,username,role,permissions[],expires_at}`；无效/吊销/过期/封禁统一 `401 invalid_token` |
+| POST | `/api/auth/tokens/introspect` | **无** | 内省：下游服务凭明文换 `{valid,user_id,username,permissions[],expires_at}`；无效/吊销/过期/封禁统一 `401 invalid_token` |
 | GET/POST | `/api/admin/users` | 管理员 | 账号列表（含 `banned`）/ 创建账号（默认角色 `editor`） |
-| PUT | `/api/admin/users/{id}/role`、`/api/admin/users/{id}/password` | 管理员 | 改角色（`user/editor/admin`，不得降级最后一个管理员）/ 重置密码 |
+| PUT | `/api/admin/users/{id}/password` | `auth.users.manage` | 重置密码 |
 | PUT | `/api/admin/users/{id}/groups` | `auth.users.manage` | 设置该用户的权限组（`groups` 整组替换） |
 | PUT | `/api/admin/users/{id}/ban` | `auth.users.manage` | 封禁 / 解封（body `{"banned":true|false}`，缺字段 400 `invalid_payload`）；封禁同时删除该用户的会话、第三方令牌与未兑换授权码，且验签立即拒绝（见「账号封禁」） |
 | GET/PUT | `/api/admin/settings` | `auth.settings.manage` | 实例设置的读取与局部更新（管理台用）；只认接受表里的键，表外的键一律 `400 invalid_setting: <key>` |
@@ -46,7 +46,7 @@ MetaFusion 统一账号与令牌服务：用户、会话、OAuth 2.0 / OIDC 与 
 | GET | `/api/admin/permissions` | `auth.groups.manage` | 权限码清单（`items`），供管理台按域展示可授予的码 |
 | GET | `/api/oauth/authorize` | 登录 | 授权码流程：校验 client 与 redirect_uri 白名单、校验并收敛 scope；已登录但未表态时渲染同意页，`consent=allow` 才发码，`consent=deny` 带 `error=access_denied` 回跳；`trusted` 客户端跳过同意页。PKCE 支持 `S256`/`plain` |
 | POST | `/api/oauth/token` | 匿名 | 授权码换令牌（表单或 JSON），响应含收敛后的 `scope`、真实 `expires_in` 与 `id_token`（aud 指向客户端） |
-| GET | `/api/oauth/userinfo` | 令牌 | OIDC 用户信息，**按令牌 scope 裁剪**：`sub`/`id` 恒回，`profile` → `username`/`role`，`email` → `email`；以 `auth.oauth_tokens` 的存活行为准，令牌被吊销/客户端停用后立即 401。实例自身的会话令牌（scope 为空串，排障用）保持全字段 |
+| GET | `/api/oauth/userinfo` | OAuth 令牌 | OIDC 用户信息，**按令牌 scope 裁剪**：`sub`/`id` 恒回，`profile` → `username`，`email` → `email`；以 `auth.oauth_tokens` 的存活行为准，令牌被吊销/客户端停用后立即 401 |
 | GET/POST | `/api/admin/oauth/clients` | `auth.oauth.manage` | 管理面客户端列表（`items`）/ 创建（返回一次性明文密钥，库里只存 bcrypt 哈希） |
 | PUT/DELETE | `/api/admin/oauth/clients/{id}` | `auth.oauth.manage` | 更新（改名 / 回调白名单 / scope 白名单 / trusted / 停用）/ 删除（第一方种子客户端不可删） |
 | POST | `/api/admin/oauth/clients/{id}/rotate-secret` | `auth.oauth.manage` | 轮换密钥：明文只返回一次，老密钥立即失效 |
@@ -124,7 +124,7 @@ PAT 内省是另一套独立限流（IP 与令牌双维度，**不读**上面两
 | GET | `/api/auth/tokens` | 令牌 | 只列**本人**的令牌（`items`：`id`/`name`/`token_prefix`/`scopes`/`expires_at`/`last_used_at`/`created_at`/`revoked_at`/`active`） |
 | POST | `/api/auth/tokens` | 令牌 | 创建（`name` / `scopes[]` **至少一个权限码** / `expires_in_days?`，0 或缺省 = 永不过期）→ `201 {token, item}`，**明文只此一次** |
 | DELETE | `/api/auth/tokens/{id}` | 令牌 | 吊销本人的令牌（写 `revoked_at`，不删行；幂等，已吊销再删仍 200；不是本人的一律 404 `token_not_found`） |
-| POST | `/api/auth/tokens/introspect` | 无 | 内省（下游服务调用）：body `{"token":"mfp_..."}` → `{valid,user_id,username,role,permissions[],scopes[],token_prefix,expires_at}` |
+| POST | `/api/auth/tokens/introspect` | 无 | 内省（下游服务调用）：body `{"token":"mfp_..."}` → `{valid,user_id,username,permissions[],scopes[],token_prefix,expires_at}` |
 
 - **明文只出现一次**：`auth.personal_access_tokens.token_hash` 是 SHA-256 十六进制（唯一索引）+
   `token_prefix`（明文前 12 字符）。为什么不是 bcrypt：PAT 明文是 32 字节高熵随机串，不存在被猜解的
@@ -133,15 +133,11 @@ PAT 内省是另一套独立限流（IP 与令牌双维度，**不读**上面两
   超出本人权限的创建直接拒绝（`400 scope_not_granted: <code>`），不静默取交集——否则用户会拿到
   一张比他要的更弱的令牌却毫无察觉。
 - **空 scopes 被拒绝**（`400 invalid_scope: empty`，缺失该字段、传 `[]` 或全空白都算）：创建时必须
-  至少给一个权限码。理由不是洁癖：**没有权限的令牌在既有判定下会变成全权令牌**——`Can` 在
-  `permissions` 为空时按 `role` 兜底到 admin/editor，而这条兜底在下游照抄 `Can` 的地方一定会生效，
-  于是"什么都做不了"的令牌对管理员账号等于全权 PAT。与其留一个静默扩权的语义，不如在创建时挡住。
+  至少给一个权限码，避免签发没有实际用途的令牌。
 - **有效权限 = 账号现时权限 ∩ 该 PAT 的 scopes**，内省每次回表重算（账号权限被收回后，
   同一张令牌的下一次内省立刻就窄了）。下游仍然只用一份权限判定，不需要为 PAT 写第二套逻辑。
-- **下游的判定口径（第二道防线，必须照做）**：PAT principal 一律用
-  `HasPermission(principal.Permissions, code)` 语义判定。`permissions` 非空时它与 `Can(user, code)`
-  完全等价，但**为空时只有它安全**：`Can` 会按 `role` 兜底到 admin/editor。交集为空是真会发生的
-  （创建后账号丢了那个权限码），此时令牌应当什么都做不了，而不是变成全权令牌。
+- **下游的判定口径**：PAT principal 一律用 `HasPermission(principal.Permissions, code)`。
+  创建后账号失去权限时，交集可能为空，此时令牌不再授权任何操作。
 - **内省不缓存、下游缓存 60 秒**：本服务每次内省都查库（自身即时），下游按 `token_hash` 缓存 60 秒，
   因此**端到端吊销最长 60 秒生效**——不要对用户声称立即失效。
 - **限流**：内省按来源 IP（600 次/分）与令牌哈希（60 次/分）双维度固定窗口；超限 `429 rate_limited`
@@ -193,33 +189,27 @@ PAT 内省是另一套独立限流（IP 与令牌双维度，**不读**上面两
 
 | 令牌 | `token_use` | 身份内容 | 管理 API |
 | --- | --- | --- | --- |
-| 站内会话（login/register/refresh） | `session` | 完整身份：真实 `role`/`groups`/`permissions`/`email` | 按权限码正常判定 |
-| 第三方 OAuth 访问令牌 | `oauth`（另带 `client_id`/`scope`） | 最小身份：`role` 恒为 `user`、组与权限恒空；`username` 仅 profile 授予时有值，`email` 仅 email 授予时有值 | **默认拒绝**（本站管理路由 403，下游同样必须拒绝） |
-| `id_token`（`aud` 指向当事客户端） | `id_token` | 与 userinfo 同口径（profile→`username`/`role`，email→`email`，组与权限不带） | **默认拒绝** |
+| 站内会话（login/register/refresh） | `session` | 完整身份：`groups`/`permissions`/`email` | 按权限码正常判定 |
+| 第三方 OAuth 访问令牌 | `oauth`（另带 `client_id`/`scope`） | 最小身份：组与权限恒空；`username` 仅 profile 授予时有值，`email` 仅 email 授予时有值 | **默认拒绝**（本站管理路由 403，下游同样必须拒绝） |
+| `id_token`（`aud` 指向当事客户端） | `id_token` | 与 userinfo 同口径（profile→`username`，email→`email`，组与权限不带） | **默认拒绝** |
 | PAT（`mfp_`，走内省） | 无（不在 JWT 体系内） | 内省返回有效权限（账号现时权限 ∩ scopes） | 按内省 `permissions` 用 `HasPermission` 判定，空即无权 |
 
 - `audience` 仍是平台受众（JWKS/issuer 配置不动）：下游**不能只验 aud**，必须再看 `token_use`。
-  未升级的下游也不会被越权——第三方令牌里的 `role`/`permissions` 已是最小值，`Can` 类按 `role` 兜底的旧判定同样放行不了。
 - `/api/oauth/token` 响应的 `user` 与 `access_token`/`id_token` 自身都按授予 scope 裁剪
   （JWT 可被第三方直接解码，userinfo 的裁剪盖不住它）；`GET /api/auth/me` 对第三方令牌只返回令牌投影，不再回表补昵称/简介。
 - 本站管理闸门（`requirePermission`/`store.Can`）对 `token_use=oauth`/`id_token` 统一拒绝；
   `POST /api/auth/tokens`（PAT 创建）等自助端点同样不再接受第三方令牌提权（`NormalizePATScopes` 经 `Can` 直接失败）。
-- 历史令牌（无 `token_use` 字段，≤15 分钟自然过期）仍按会话语义兼容，不做强制作废。
+- 缺少 `token_use` 的 JWT 一律拒收。
 
 **下游验签/内省契约更新与迁移说明**（目录 / 互动 / 存储同步实施）：
 
-1. 验签保持 issuer/audience/JWKS 不变，新增一条规则：`token_use` 缺席或为 `session` 才进入管理授权；
+1. 验签保持 issuer/audience/JWKS 不变，`token_use=session` 才进入管理授权；
    `oauth`/`id_token` 在管理路由上直接 401/403，只在纯身份读取面按 `scope` 裁剪展示（`sub` 恒可用，
    `username` 需 profile，`email` 需 email）。未知 `token_use` 取值一律拒收。
-2. 授权判定统一为：会话令牌走既有权限码判定（含历史 role 兜底，仅限无 `permissions` 声明的老令牌）；
-   第三方与 PAT 身份一律用 `HasPermission(permissions, code)` 语义——**显式空权限就是无权，
-   不得回落到 `role=admin`**（存储 `permission.go:76` 与互动兼容路径的同类兜底同步删除）。
-3. 上线顺序：账号服务与各业务服务同批部署；单服务先上不影响另一侧（新令牌对旧下游是最小权限，
-   旧令牌对新下游按历史语义兼容，均 fail-closed）。第一方前端的管理操作必须走站内会话
-   （login/refresh + Cookie），不得再拿 OAuth 访问令牌调用管理 API。
+2. 授权判定统一为 `HasPermission(permissions, code)`，空权限即无权。
+3. 账号服务与各业务服务同批部署；第一方前端的管理操作走站内会话（login/refresh + Cookie）。
 
-**令牌有效期与续期**：访问令牌是 15 分钟 RS256 JWT（`expires_in` 报真实值）；
-未配置签发器时退化为不透明令牌（30 天，`expires_in` 为 2592000，兼容旧口径）。
+**令牌有效期与续期**：访问令牌是 15 分钟 RS256 JWT（`expires_in` 报真实值）；未配置签发密钥时服务拒绝启动。
 本服务**不签发 `refresh_token`**：
 
 - 第一方前端的续期走 `POST /api/auth/refresh` + 服务端会话轮转，本来就不需要 `refresh_token`；
@@ -267,12 +257,13 @@ PAT 内省是另一套独立限流（IP 与令牌双维度，**不读**上面两
 账号表位于**独立的 `auth` schema**，与目录库同实例但不同 schema，且不跨 schema 建外键
 （目录侧只保留裸 UUID 引用）。因此切流**不需要数据搬运**，只需要把网关前缀指过来。
 
-- 表结构：`Init` 幂等建表（`CREATE ... IF NOT EXISTS` + 放宽 `users_role_check`），
+- 表结构：`Init` 幂等建表（`CREATE ... IF NOT EXISTS`），
   **线上 auth schema 的列形状是唯一基线**（见 `internal/store/schema_parity_test.go` 的冻结值）。
 - 第一方 OAuth 客户端（`metafusion-catalog` / `-forum` / `-resources`）的种子也在 `Init` 里，
   与建表同一处：这三个客户端原先由目录服务在启动时写入，账号拆出后随 schema 一起搬进来，
   `ON CONFLICT DO NOTHING` 保护后台改过的配置。目录服务现在**不再创建、也不再写入任何 auth 对象**。
 - 该服务**没有版本化迁移**：建表语句即当前终态，改动需同时更新冻结用例。
+- 全部账号与下游实例升级到权限码版本后，再执行 `sql/drop-user-role.sql` 删除旧库中的 `auth.users.role`。服务启动期间不自动删列，避免滚动发布中旧实例读取失败。
 - 本轮新增的列与表都以 `ADD COLUMN IF NOT EXISTS` / `CREATE TABLE IF NOT EXISTS` 写在 `Init` 里
   （`oauth_clients.scopes`、`oauth_clients.disabled`、`oauth_tokens.jti`、`auth.oauth_audit`、
   `auth.personal_access_tokens`），老库启动即补齐，不需要手工迁移；冻结值同步在

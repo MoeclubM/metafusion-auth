@@ -62,8 +62,8 @@ func TestIdentityLifecycleAgainstPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create first admin: %v", err)
 	}
-	if admin.Role != "admin" {
-		t.Fatalf("首管角色应为 admin，实际 %s", admin.Role)
+	if !HasPermission(admin.Permissions, "*") {
+		t.Fatalf("首管应持有全部权限，实际 %v", admin.Permissions)
 	}
 	if _, err = s.CreateUser(ctx, "root2", "", "first-admin-secret", true, nil); err == nil {
 		t.Fatal("重复初始化必须被拒绝")
@@ -78,7 +78,7 @@ func TestIdentityLifecycleAgainstPostgres(t *testing.T) {
 		t.Fatalf("登录返回的账号不一致: %s != %s", logged.ID, admin.ID)
 	}
 	who, err := s.Authenticate(ctx, token)
-	if err != nil || who.ID != admin.ID || who.Role != "admin" {
+	if err != nil || who.ID != admin.ID || !HasPermission(who.Permissions, "*") {
 		t.Fatalf("验签身份不一致: %+v err=%v", who, err)
 	}
 
@@ -107,15 +107,15 @@ func TestIdentityLifecycleAgainstPostgres(t *testing.T) {
 		t.Fatalf("新密码应可用: %v", err)
 	}
 
-	// 角色：普通用户可以提升为编辑；最后一个管理员不得被降级。
+	// 权限组：可以授予编辑组；最后一个管理员不得失去 admin 组。
 	user, err := s.CreateUser(ctx, "kana", "", "editor-account-secret", false, &admin)
 	if err != nil {
 		t.Fatalf("create editor: %v", err)
 	}
-	if err = s.UpdateUserRole(ctx, user.ID, "editor", &admin); err != nil {
-		t.Fatalf("promote to editor: %v", err)
+	if err = s.SetUserGroups(ctx, user.ID, []string{"catalog_editor", "member"}, &admin); err != nil {
+		t.Fatalf("grant catalog editor group: %v", err)
 	}
-	if err = s.UpdateUserRole(ctx, admin.ID, "editor", &admin); err == nil {
+	if err = s.SetUserGroups(ctx, admin.ID, []string{"member"}, &admin); err == nil {
 		t.Fatal("唯一管理员降级必须被拒绝")
 	}
 

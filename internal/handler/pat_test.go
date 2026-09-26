@@ -107,7 +107,7 @@ func TestTokenEndpointsRequireLogin(t *testing.T) {
 func TestTokenCreateValidatesScopesAgainstActor(t *testing.T) {
 	fake := &fakePATs{plain: testPATPlain}
 	r, s := newPATTestServer(t, fake)
-	member := store.User{ID: "77777777-7777-7777-7777-777777777777", Username: "member", Role: "user", Permissions: []string{"catalog.entity.edit"}}
+	member := store.User{ID: "77777777-7777-7777-7777-777777777777", Username: "member", Permissions: []string{"catalog.entity.edit"}}
 	bearer := signBearer(t, s, member)
 
 	// 超出本人权限、格式非法、有效期非法：都是 400 + 稳定机器码，且一个都不该落库。
@@ -160,7 +160,7 @@ func TestTokenCreateValidatesScopesAgainstActor(t *testing.T) {
 
 func TestTokenCreateReturnsPlaintextWithoutHash(t *testing.T) {
 	r, s := newPATTestServer(t, &fakePATs{plain: testPATPlain})
-	admin := store.User{ID: "88888888-8888-8888-8888-888888888888", Username: "ops", Role: "admin", Permissions: []string{"*"}}
+	admin := store.User{ID: "88888888-8888-8888-8888-888888888888", Username: "ops", Permissions: []string{"*"}}
 	bearer := signBearer(t, s, admin)
 
 	w := doJSON(t, r, http.MethodPost, "/api/auth/tokens", bearer, `{"name":"批量脚本","scopes":["catalog.entity.edit"]}`)
@@ -203,8 +203,7 @@ func TestTokenCreateReturnsPlaintextWithoutHash(t *testing.T) {
 func TestTokenIntrospectReturnsPrincipal(t *testing.T) {
 	principal := &store.PATPrincipal{
 		TokenID: testPATID, TokenName: "CI 编目",
-		UserID: "77777777-7777-7777-7777-777777777777", Username: "member", Role: "user",
-		Permissions: []string{"catalog.entity.edit"}, Scopes: []string{"catalog.entity.edit"},
+		UserID: "77777777-7777-7777-7777-777777777777", Username: "member", Permissions: []string{"catalog.entity.edit"}, Scopes: []string{"catalog.entity.edit"},
 		TokenPrefix: testPATPlain[:12],
 	}
 	r, _ := newPATTestServer(t, &fakePATs{plain: testPATPlain, principal: principal})
@@ -225,7 +224,7 @@ func TestTokenIntrospectReturnsPrincipal(t *testing.T) {
 		ExpiresAt   *time.Time `json:"expires_at"`
 	}
 	decodeInto(t, w, &got)
-	if !got.Valid || got.UserID != principal.UserID || got.Username != principal.Username || got.Role != principal.Role {
+	if !got.Valid || got.UserID != principal.UserID || got.Username != principal.Username {
 		t.Fatalf("内省身份不符：%+v", got)
 	}
 	if got.TokenID != testPATID || got.TokenName != "CI 编目" {

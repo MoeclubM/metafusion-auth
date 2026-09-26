@@ -102,7 +102,7 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 			// 首个管理员此时还没有会话（不签发令牌），凭据类型按 anonymous 记，靠 changes.via 区分入口。
 			audit.SetActor(c, audit.Actor{UserID: u.ID, Username: u.Username, CredentialType: audit.CredentialAnonymous})
 			audit.Describe(c, audit.Detail{TargetType: "user", TargetID: u.ID, Changes: map[string]any{
-				"username": u.Username, "email": in.Email, "role": u.Role, "via": "setup"}})
+				"username": u.Username, "email": in.Email, "via": "setup"}})
 		}
 		respond(c, u, err)
 	})
@@ -130,7 +130,7 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 			audit.Describe(c, audit.Detail{TargetType: "account", Changes: map[string]any{
 				"attempted_username": in.Username, "via": "password"}})
 		}
-		respond(c, gin.H{"token": token, "access_token": token, "token_type": "Bearer", "expires_in": int(store.AccessTokenTTL.Seconds()), "user": u}, err)
+		respond(c, gin.H{"access_token": token, "token_type": "Bearer", "expires_in": int(store.AccessTokenTTL.Seconds()), "user": u}, err)
 	})
 
 	// POST /auth/refresh 用当前 Bearer/Cookie 令牌换发新令牌（服务端轮转会话行）。
@@ -141,7 +141,7 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		if err == nil && next != "" {
 			setSessionCookie(c, next, 86400)
 		}
-		respond(c, gin.H{"token": next, "access_token": next, "token_type": "Bearer", "expires_in": int(store.AccessTokenTTL.Seconds()), "user": u}, err)
+		respond(c, gin.H{"access_token": next, "token_type": "Bearer", "expires_in": int(store.AccessTokenTTL.Seconds()), "user": u}, err)
 	})
 
 	api.GET("/auth/me", requireUser(), func(c *gin.Context) {
@@ -215,10 +215,10 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 			audit.SetActor(c, audit.Actor{UserID: u.ID, Username: u.Username, CredentialType: audit.CredentialSession})
 			// 邀请码是准凭据：只记掩码后的前 4 位（契约 §4）。
 			audit.Describe(c, audit.Detail{TargetType: "user", TargetID: u.ID, Changes: map[string]any{
-				"username": u.Username, "email": in.Email, "role": u.Role,
+				"username": u.Username, "email": in.Email,
 				"invite_code": audit.MaskSecret(in.InviteCode)}})
 		}
-		respond(c, gin.H{"token": token, "access_token": token, "token_type": "Bearer", "expires_in": int(store.AccessTokenTTL.Seconds()), "user": u}, err)
+		respond(c, gin.H{"access_token": token, "token_type": "Bearer", "expires_in": int(store.AccessTokenTTL.Seconds()), "user": u}, err)
 	})
 
 	// 个人邀请页：我的邀请码台账 + 由我邀请进来的人。
@@ -445,25 +445,9 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 		u, err := s.CreateUser(c.Request.Context(), in.Username, in.Email, in.Password, false, currentUser(c))
 		if err == nil {
 			audit.Describe(c, audit.Detail{TargetType: "user", TargetID: u.ID, Changes: map[string]any{
-				"username": u.Username, "email": in.Email, "role": u.Role, "via": "admin"}})
+				"username": u.Username, "email": in.Email, "via": "admin"}})
 		}
 		respond(c, u, err)
-	})
-	api.PUT("/admin/users/:id/role", requirePermission("auth.users.manage"), func(c *gin.Context) {
-		var in struct {
-			Role string `json:"role"`
-		}
-		if !body(c, &in) {
-			return
-		}
-		before, _ := s.AuditUserSnapshot(c.Request.Context(), c.Param("id"))
-		err := s.UpdateUserRole(c.Request.Context(), c.Param("id"), in.Role, currentUser(c))
-		if err == nil {
-			changes := auditUserChanges(before)
-			changes["after_role"] = in.Role
-			audit.Describe(c, audit.Detail{TargetType: "user", TargetID: c.Param("id"), Changes: changes})
-		}
-		respond(c, gin.H{"ok": true}, err)
 	})
 	api.PUT("/admin/users/:id/password", requirePermission("auth.users.manage"), func(c *gin.Context) {
 		var in struct {

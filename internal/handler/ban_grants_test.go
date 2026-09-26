@@ -27,13 +27,13 @@ func TestBanAndGrantEndpointGates(t *testing.T) {
 		}
 	}
 
-	member := store.User{ID: "77777777-7777-7777-7777-777777777777", Username: "member", Role: "user", Permissions: []string{"community.post.create"}}
+	member := store.User{ID: "77777777-7777-7777-7777-777777777777", Username: "member", Permissions: []string{"community.post.create"}}
 	memberBearer := signBearer(t, s, member)
 	if w := doJSON(t, r, http.MethodPut, "/api/admin/users/"+other+"/ban", memberBearer, "{\"banned\":true}"); w.Code != http.StatusForbidden {
 		t.Fatalf("无 auth.users.manage 应 403，实际 %d", w.Code)
 	}
 
-	ops := store.User{ID: "88888888-8888-8888-8888-888888888888", Username: "ops", Role: "user", Permissions: []string{"auth.users.manage"}}
+	ops := store.User{ID: "88888888-8888-8888-8888-888888888888", Username: "ops", Permissions: []string{"auth.users.manage"}}
 	opsBearer := signBearer(t, s, ops)
 	if w := doJSON(t, r, http.MethodPut, "/api/admin/users/"+other+"/ban", opsBearer, "{}"); w.Code != http.StatusBadRequest {
 		t.Fatalf("缺 banned 字段应 400，实际 %d / %s", w.Code, w.Body.String())

@@ -57,7 +57,6 @@ export const USER_ERROR_KEYS: Record<string, string> = {
   cannot_ban_self: "users.err.cannotBanSelf",
   cannot_ban_sole_admin: "users.err.cannotBanSoleAdmin",
   cannot_demote_sole_admin: "users.err.cannotDemoteSoleAdmin",
-  invalid_role: "users.err.invalidRole",
   invalid_password_length: "users.err.invalidPasswordLength",
   invalid_credentials_format: "users.err.invalidCredentials",
   user_not_found: "users.err.userNotFound",

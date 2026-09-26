@@ -100,7 +100,7 @@ var consentTexts = map[string]consentText{
 		Footnote:         "An authorization code is sent back to the address above after you allow. You can review and revoke this authorization from your account page; an administrator can also revoke the client's tokens in the admin console.",
 		Scopes: map[string]consentScopeText{
 			"openid":  {Name: "Verify your identity", Desc: "Returns your account ID (sub)"},
-			"profile": {Name: "Read your basic profile", Desc: "Username and role"},
+			"profile": {Name: "Read your basic profile", Desc: "Username"},
 			"email":   {Name: "Read your email address", Desc: "The email on your account"},
 		},
 	},

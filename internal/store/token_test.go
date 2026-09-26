@@ -36,7 +36,7 @@ func newIssuer(t *testing.T, issuer, audience string) *TokenIssuer {
 // 令牌闭环是账号服务的地基：签发 → 验签 → 身份还原 → 注销后拒绝。
 func TestTokenRoundTripAndRevocation(t *testing.T) {
 	iss := newIssuer(t, "https://findverse.cc/api", "metafusion")
-	u := User{ID: "11111111-1111-1111-1111-111111111111", Username: "kana", Email: "kana@example.com", Role: "editor"}
+	u := User{ID: "11111111-1111-1111-1111-111111111111", Username: "kana", Email: "kana@example.com"}
 
 	token, jti, exp, err := iss.Sign(u)
 	if err != nil {
@@ -50,7 +50,7 @@ func TestTokenRoundTripAndRevocation(t *testing.T) {
 		t.Fatalf("verify: %v", err)
 	}
 	got := ClaimsToUser(claims)
-	if got.ID != u.ID || got.Username != u.Username || got.Role != u.Role || got.Email != u.Email {
+	if got.ID != u.ID || got.Username != u.Username || got.Email != u.Email {
 		t.Fatalf("身份还原不一致: %+v", got)
 	}
 
@@ -63,7 +63,7 @@ func TestTokenRoundTripAndRevocation(t *testing.T) {
 // 受众与 issuer 是跨服务隔离的唯一手段：任一项不符必须拒绝。
 func TestVerifyRejectsWrongIssuerOrAudience(t *testing.T) {
 	iss := newIssuer(t, "https://findverse.cc/api", "metafusion")
-	token, _, _, err := iss.Sign(User{ID: "u1", Username: "kana", Role: "admin"})
+	token, _, _, err := iss.Sign(User{ID: "u1", Username: "kana"})
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestEphemeralKeyRequiresExplicitOptIn(t *testing.T) {
 			t.Fatalf("显式开关 %q 下应标记为临时密钥（调用方据此告警）", right)
 		}
 		// "允许"必须真的可用：签得出、验得回。
-		token, _, _, err := iss.Sign(User{ID: "11111111-1111-1111-1111-111111111111", Username: "kana", Role: "user"})
+		token, _, _, err := iss.Sign(User{ID: "11111111-1111-1111-1111-111111111111", Username: "kana"})
 		if err != nil {
 			t.Fatalf("临时密钥签发失败: %v", err)
 		}

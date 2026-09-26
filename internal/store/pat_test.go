@@ -40,7 +40,7 @@ func patTestUser(t *testing.T, ctx context.Context, s *Store, groupCode string) 
 	if err != nil {
 		t.Fatalf("哈希测试口令: %v", err)
 	}
-	if _, err := s.DB.ExecContext(ctx, "INSERT INTO auth.users(id,username,email,password_hash,role) VALUES($1,$2,$3,$4,'user')", id, username, username+"@example.test", string(hash)); err != nil {
+	if _, err := s.DB.ExecContext(ctx, "INSERT INTO auth.users(id,username,email,password_hash) VALUES($1,$2,$3,$4)", id, username, username+"@example.test", string(hash)); err != nil {
 		t.Fatalf("插入测试账号: %v", err)
 	}
 	t.Cleanup(func() { testutil.DeleteUser(t, s.DB, id) })
@@ -49,7 +49,7 @@ func patTestUser(t *testing.T, ctx context.Context, s *Store, groupCode string) 
 			t.Fatalf("加入权限组 %s: %v", groupCode, err)
 		}
 	}
-	u := &User{ID: id, Username: username, Role: "user"}
+	u := &User{ID: id, Username: username}
 	if err := s.WithAccess(ctx, u); err != nil {
 		t.Fatalf("补齐权限: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestPersonalAccessTokensAgainstPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("内省有效令牌: %v", err)
 	}
-	if p.UserID != member.ID || p.Username != member.Username || p.Role != "user" {
+	if p.UserID != member.ID || p.Username != member.Username {
 		t.Fatalf("内省身份不符: %+v", p)
 	}
 	if !reflect.DeepEqual(p.Permissions, []string{"catalog.entity.edit"}) {

@@ -2,13 +2,12 @@ package store
 
 import "testing"
 
-// 授权断言的唯一口径：令牌带 permissions 时一律以码为准，只有完全没有 permissions
-// 声明时（老令牌 / 尚未配置权限组的实例）才按历史 role 兜底。
+// 授权断言的唯一口径：只按 permissions 判断。
 //
 // 这条用例钉住"持一个 auth.* 码 ≠ 管理员"：曾经的 handler.isAdmin 把任意 auth.*
 // 前缀当成管理员，持 auth.invites.manage 的成员因此能通过其它管理域的闸门。
 func TestCanPrefersPermissionCodesOverRole(t *testing.T) {
-	invites := &User{ID: "u-invites", Username: "inviter", Role: "user", Permissions: []string{"auth.invites.manage"}}
+	invites := &User{ID: "u-invites", Username: "inviter", Permissions: []string{"auth.invites.manage"}}
 	cases := []struct {
 		name string
 		u    *User
@@ -20,13 +19,11 @@ func TestCanPrefersPermissionCodesOverRole(t *testing.T) {
 		{"持码不放行权限组管理码", invites, "auth.groups.manage", false},
 		{"持码不放行实例设置码", invites, "auth.settings.manage", false},
 		{"持码不放行目录码", invites, "catalog.entity.edit", false},
-		{"通配全放行", &User{Role: "user", Permissions: []string{"*"}}, "catalog.entity.edit", true},
-		{"通配即管理员", &User{Role: "user", Permissions: []string{"*"}}, WildcardPermission, true},
-		{"老令牌 role=admin 兜底", &User{Role: "admin"}, "auth.users.manage", true},
-		{"老令牌 role=admin 即管理员", &User{Role: "admin"}, WildcardPermission, true},
-		{"老令牌 role=user 不放行", &User{Role: "user"}, "auth.users.manage", false},
-		{"老令牌 role=editor 不放行管理码", &User{Role: "editor"}, "auth.users.manage", false},
-		{"带上权限声明后角色不再兜底", &User{Role: "admin", Permissions: []string{"catalog.entity.edit"}}, "auth.groups.manage", false},
+		{"通配全放行", &User{Permissions: []string{"*"}}, "catalog.entity.edit", true},
+		{"通配即管理员", &User{Permissions: []string{"*"}}, WildcardPermission, true},
+		{"空权限不放行", &User{}, "auth.users.manage", false},
+		{"空权限不授予通配", &User{}, WildcardPermission, false},
+		{"其它域权限不放行", &User{Permissions: []string{"catalog.entity.edit"}}, "auth.groups.manage", false},
 		{"空身份", nil, "auth.users.manage", false},
 	}
 	for _, tc := range cases {

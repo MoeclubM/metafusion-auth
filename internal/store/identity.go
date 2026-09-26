@@ -21,22 +21,22 @@ func (s *Store) User(ctx context.Context, token string) (*User, error) {
 	var u User
 	// NOT u.banned 是必须的：封禁后会话行与令牌行会被删掉，但"删行"与"封禁生效"之间
 	// 不该有窗口，读路径自己也拦一道（旧库/并行实例里残留的行同样按封禁处理）。
-	err := s.DB.QueryRowContext(ctx, "SELECT u.id,u.username,COALESCE(u.email,''),u.role FROM auth.sessions s JOIN auth.users u ON u.id=s.user_id WHERE s.token_hash=$1 AND NOT u.banned AND s.expires_at>now()", h).Scan(&u.ID, &u.Username, &u.Email, &u.Role)
+	err := s.DB.QueryRowContext(ctx, "SELECT u.id,u.username,COALESCE(u.email,'') FROM auth.sessions s JOIN auth.users u ON u.id=s.user_id WHERE s.token_hash=$1 AND NOT u.banned AND s.expires_at>now()", h).Scan(&u.ID, &u.Username, &u.Email)
 	if err == nil {
 		u.TokenUse = TokenUseSession
 		// 会话路径必须补齐组与权限：访问令牌过期（AccessTokenTTL）后请求回退到这里，
-		// 而 permissions 是唯一授权来源——漏掉就会让"role 仍是 user、权限全来自自定义组"的
+		// 而 permissions 是唯一授权来源——漏掉就会让权限全来自自定义组的
 		// 成员在令牌过期那一刻丢掉全部能力（管理台入口消失、端点 403），续期路径却还有权限。
 		if err := s.WithAccess(ctx, &u); err != nil {
 			return &u, err
 		}
 		return &u, nil
 	}
-	// S01：第三方令牌行只解析出最小身份（role 恒为 user、无组与权限，email/username
+	// S01：第三方令牌行只解析出最小身份（无组与权限，email/username
 	// 按行内 scope 裁剪），且**不**补 WithAccess——补了等于把刚收敛掉的权限再贴回去。
 	// 不透明第三方令牌（未配置签发器时签发的那种）走这里，JWT 路径走验签。
 	var scope, clientID string
-	err = s.DB.QueryRowContext(ctx, "SELECT u.id, u.username, COALESCE(u.email,''), u.role, t.scope, t.client_id FROM auth.oauth_tokens t JOIN auth.users u ON u.id=t.user_id WHERE t.token_hash=$1 AND NOT u.banned AND t.expires_at>now()", h).Scan(&u.ID, &u.Username, &u.Email, &u.Role, &scope, &clientID)
+	err = s.DB.QueryRowContext(ctx, "SELECT u.id, u.username, COALESCE(u.email,''), t.scope, t.client_id FROM auth.oauth_tokens t JOIN auth.users u ON u.id=t.user_id WHERE t.token_hash=$1 AND NOT u.banned AND t.expires_at>now()", h).Scan(&u.ID, &u.Username, &u.Email, &scope, &clientID)
 	if err != nil {
 		return &u, err
 	}
@@ -52,16 +52,7 @@ func (s *Store) SetupNeeded(ctx context.Context) (bool, error) {
 }
 
 func (s *Store) CreateUser(ctx context.Context, username, email, password string, setup bool, actor *User) (User, error) {
-	return s.CreateUserWithRole(ctx, username, email, password, setup, "editor", actor)
-}
-
-// CreateUserWithRole 创建指定角色的账号。setup 忽略角色直接建首个 admin；
-// editor 由管理员在管理台创建；user（审核制普通用户）供将来的自助注册端点使用。
-func (s *Store) CreateUserWithRole(ctx context.Context, username, email, password string, setup bool, role string, actor *User) (User, error) {
-	if role != "user" && role != "editor" && role != "admin" {
-		return User{}, fmt.Errorf("invalid_role")
-	}
-	u := User{ID: uuid.NewString(), Username: strings.TrimSpace(username), Email: strings.TrimSpace(email), Role: role}
+	u := User{ID: uuid.NewString(), Username: strings.TrimSpace(username), Email: strings.TrimSpace(email)}
 	if u.Email == "" {
 		u.Email = fmt.Sprintf("%s@findverse.cc", u.Username)
 	}
@@ -84,12 +75,15 @@ func (s *Store) CreateUserWithRole(ctx context.Context, username, email, passwor
 			if n != 0 {
 				return fmt.Errorf("setup_complete")
 			}
-			u.Role = "admin"
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO auth.users(id,username,email,password_hash,role) VALUES($1,$2,$3,$4,$5)", u.ID, u.Username, u.Email, string(hash), u.Role); err != nil {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO auth.users(id,username,email,password_hash) VALUES($1,$2,$3,$4)", u.ID, u.Username, u.Email, string(hash)); err != nil {
 			return err
 		}
-		for _, code := range RoleToGroups(u.Role) {
+		groupCodes := []string{"member"}
+		if setup {
+			groupCodes = []string{"admin"}
+		}
+		for _, code := range groupCodes {
 			var gid string
 			if err := tx.QueryRowContext(ctx, "SELECT id FROM auth.groups WHERE code=$1", code).Scan(&gid); err != nil {
 				continue
@@ -100,6 +94,10 @@ func (s *Store) CreateUserWithRole(ctx context.Context, username, email, passwor
 		}
 		return nil
 	})
+	if err != nil {
+		return u, err
+	}
+	err = s.WithAccess(ctx, &u)
 	return u, err
 }
 
@@ -110,7 +108,7 @@ func (s *Store) Login(ctx context.Context, username, password string) (string, U
 	var u User
 	var stored string
 	var banned bool
-	err := s.DB.QueryRowContext(ctx, "SELECT id,username,COALESCE(email,''),role,password_hash,banned,COALESCE(display_name,''),COALESCE(bio,'') FROM auth.users WHERE username=$1 OR (email=$1 AND email<>'')", strings.TrimSpace(username)).Scan(&u.ID, &u.Username, &u.Email, &u.Role, &stored, &banned, &u.DisplayName, &u.Bio)
+	err := s.DB.QueryRowContext(ctx, "SELECT id,username,COALESCE(email,''),password_hash,banned,COALESCE(display_name,''),COALESCE(bio,'') FROM auth.users WHERE username=$1 OR (email=$1 AND email<>'')", strings.TrimSpace(username)).Scan(&u.ID, &u.Username, &u.Email, &stored, &banned, &u.DisplayName, &u.Bio)
 	if err != nil || bcrypt.CompareHashAndPassword([]byte(stored), []byte(password)) != nil {
 		return "", u, fmt.Errorf("invalid_credentials")
 	}
@@ -170,8 +168,8 @@ func (s *Store) Logout(ctx context.Context, token string) error {
 
 // Refresh 校验现有令牌（无状态或查库），重新签发一个新令牌并清理旧会话行。
 // 用于访问令牌临近过期时的续期；refresh 本身也接受 Bearer 令牌，前端无需
-// 额外的 refresh_token 字段。新令牌按库中最新身份签发：JWT 内 role 可能陈旧
-// （降权后旧令牌仍能验签通过），必须回表取最新行，否则降权会被续期续接。
+// 额外的 refresh_token 字段。新令牌按库中最新身份签发：JWT 内权限可能陈旧，
+// 必须回表取最新行，否则降权会被续期续接。
 func (s *Store) Refresh(ctx context.Context, token string) (string, User, error) {
 	u, err := s.Authenticate(ctx, token)
 	if err != nil || u == nil {
@@ -183,7 +181,7 @@ func (s *Store) Refresh(ctx context.Context, token string) (string, User, error)
 		return "", User{}, fmt.Errorf("invalid_token")
 	}
 	var fresh User
-	if ferr := s.DB.QueryRowContext(ctx, "SELECT id,username,COALESCE(email,''),role,COALESCE(display_name,''),COALESCE(bio,'') FROM auth.users WHERE id=$1", u.ID).Scan(&fresh.ID, &fresh.Username, &fresh.Email, &fresh.Role, &fresh.DisplayName, &fresh.Bio); ferr != nil {
+	if ferr := s.DB.QueryRowContext(ctx, "SELECT id,username,COALESCE(email,''),COALESCE(display_name,''),COALESCE(bio,'') FROM auth.users WHERE id=$1", u.ID).Scan(&fresh.ID, &fresh.Username, &fresh.Email, &fresh.DisplayName, &fresh.Bio); ferr != nil {
 		return "", User{}, fmt.Errorf("invalid_token")
 	}
 	u = &fresh
@@ -309,17 +307,17 @@ func (s *Store) SetUserBanned(ctx context.Context, targetUserID string, banned b
 	if banned && actor != nil && actor.ID == targetUserID {
 		return out, fmt.Errorf("cannot_ban_self")
 	}
-	var role string
-	if err := s.DB.QueryRowContext(ctx, "SELECT role FROM auth.users WHERE id=$1", targetUserID).Scan(&role); err != nil {
+	var isAdmin bool
+	if err := s.DB.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM auth.user_groups ug JOIN auth.groups g ON g.id=ug.group_id WHERE ug.user_id=u.id AND g.code='admin') FROM auth.users u WHERE u.id=$1", targetUserID).Scan(&isAdmin); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return out, fmt.Errorf("user_not_found")
 		}
 		return out, err
 	}
-	if banned && role == "admin" {
+	if banned && isAdmin {
 		// 已封禁的管理员不计入：否则"先封一个、再封另一个"就能绕过护栏。
 		var admins int
-		if err := s.DB.QueryRowContext(ctx, "SELECT count(*) FROM auth.users WHERE role='admin' AND NOT banned").Scan(&admins); err != nil {
+		if err := s.DB.QueryRowContext(ctx, "SELECT count(*) FROM auth.users u JOIN auth.user_groups ug ON ug.user_id=u.id JOIN auth.groups g ON g.id=ug.group_id WHERE g.code='admin' AND NOT u.banned").Scan(&admins); err != nil {
 			return out, err
 		}
 		if admins <= 1 {
@@ -353,11 +351,11 @@ func (s *Store) SetUserBanned(ctx context.Context, targetUserID string, banned b
 	// 注销 jti 必须在事务提交后：回填内存状态不属于数据库事务的一部分。
 	revokeIssued(s.Tokens, revoked)
 	s.cacheBan(targetUserID, banned)
-	return User{ID: targetUserID, Role: role, Banned: banned}, nil
+	return User{ID: targetUserID, Banned: banned}, nil
 }
 
 func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
-	rows, err := s.DB.QueryContext(ctx, "SELECT id, username, COALESCE(email,''), role, banned, COALESCE(display_name,''), COALESCE(bio,'') FROM auth.users ORDER BY username ASC")
+	rows, err := s.DB.QueryContext(ctx, "SELECT id, username, COALESCE(email,''), banned, COALESCE(display_name,''), COALESCE(bio,'') FROM auth.users ORDER BY username ASC")
 	if err != nil {
 		return nil, err
 	}
@@ -365,7 +363,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	var out []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.Role, &u.Banned, &u.DisplayName, &u.Bio); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.Banned, &u.DisplayName, &u.Bio); err != nil {
 			return nil, err
 		}
 		out = append(out, u)
@@ -411,55 +409,6 @@ func (s *Store) attachAccess(ctx context.Context, users []User) error {
 		users[i].Permissions = ExpandPermissions(gs)
 	}
 	return nil
-}
-
-func (s *Store) UpdateUserRole(ctx context.Context, targetUserID, newRole string, actor *User) error {
-	if !Can(actor, "auth.users.manage") {
-		return fmt.Errorf("forbidden")
-	}
-	if newRole != "admin" && newRole != "editor" && newRole != "user" {
-		return fmt.Errorf("invalid_role")
-	}
-	// 护栏按目标当前身份判定（不只是自己）：只要降完还剩管理员就允许，
-	// 否则实例会失去管理入口。与 SetUserGroups 的"最后一个 admin 组成员"护栏同口径。
-	if newRole != "admin" {
-		var currentRole string
-		if err := s.DB.QueryRowContext(ctx, "SELECT role FROM auth.users WHERE id=$1", targetUserID).Scan(&currentRole); err != nil {
-			return fmt.Errorf("user_not_found")
-		}
-		if currentRole == "admin" {
-			var adminCount int
-			if err := s.DB.QueryRowContext(ctx, "SELECT count(*) FROM auth.users WHERE role='admin'").Scan(&adminCount); err != nil {
-				return err
-			}
-			if adminCount <= 1 {
-				return fmt.Errorf("cannot_demote_sole_admin")
-			}
-		}
-	}
-	// 角色与组同步：历史角色映射到等价组，避免"改了角色但权限没变"的双轨漂移。
-	return s.write(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, "UPDATE auth.users SET role=$1 WHERE id=$2", newRole, targetUserID)
-		if err != nil {
-			return err
-		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return fmt.Errorf("user_not_found")
-		}
-		if _, err := tx.ExecContext(ctx, "DELETE FROM auth.user_groups WHERE user_id=$1", targetUserID); err != nil {
-			return err
-		}
-		for _, code := range RoleToGroups(newRole) {
-			var gid string
-			if err := tx.QueryRowContext(ctx, "SELECT id FROM auth.groups WHERE code=$1", code).Scan(&gid); err != nil {
-				continue
-			}
-			if _, err := tx.ExecContext(ctx, "INSERT INTO auth.user_groups(user_id,group_id,granted_by) VALUES($1,$2,$3) ON CONFLICT DO NOTHING", targetUserID, gid, actor.ID); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
 }
 
 func (s *Store) ResetUserPassword(ctx context.Context, targetUserID, newPassword string, actor *User) error {

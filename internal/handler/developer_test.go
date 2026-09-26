@@ -19,9 +19,9 @@ type developerAppResponse struct {
 
 func TestDeveloperAppRegistrationAndOwnership(t *testing.T) {
 	r, s, fake := newOAuthTestServer(t)
-	owner := store.User{ID: "aaaaaaaa-1111-1111-1111-111111111111", Username: "dev-owner", Role: "user"}
-	other := store.User{ID: "bbbbbbbb-2222-2222-2222-222222222222", Username: "dev-other", Role: "user"}
-	admin := store.User{ID: "cccccccc-3333-3333-3333-333333333333", Username: "dev-admin", Role: "admin", Permissions: []string{"*"}}
+	owner := store.User{ID: "aaaaaaaa-1111-1111-1111-111111111111", Username: "dev-owner"}
+	other := store.User{ID: "bbbbbbbb-2222-2222-2222-222222222222", Username: "dev-other"}
+	admin := store.User{ID: "cccccccc-3333-3333-3333-333333333333", Username: "dev-admin", Permissions: []string{"*"}}
 	for _, u := range []store.User{owner, other, admin} {
 		fake.addUser(u)
 	}
@@ -196,7 +196,7 @@ func TestDeveloperOverviewServesEndpointsAndScopesOnly(t *testing.T) {
 	r, s, fake := newOAuthTestServer(t)
 	fake.addClient("metafusion-catalog", "MetaFusion 元数据知识库", []string{"https://findverse.cc/auth/callback"}, []string{"openid", "profile", "email"}, true, "")
 	fake.addClient("third-party", "第三方站点", []string{chainCallback}, []string{"openid"}, false, "s3cret-value")
-	member := store.User{ID: "dddddddd-4444-4444-4444-444444444444", Username: "dev-member", Role: "user"}
+	member := store.User{ID: "dddddddd-4444-4444-4444-444444444444", Username: "dev-member"}
 	fake.addUser(member)
 	bearer := signBearer(t, s, member)
 
@@ -249,8 +249,8 @@ func TestDeveloperOverviewServesEndpointsAndScopesOnly(t *testing.T) {
 // 别人的轮换请求按不存在处理。
 func TestDeveloperAppRotationKeepsOwnershipBoundary(t *testing.T) {
 	r, s, fake := newOAuthTestServer(t)
-	owner := store.User{ID: "eeeeeeee-5555-5555-5555-555555555555", Username: "dev-rotate", Role: "user"}
-	other := store.User{ID: "ffffffff-6666-6666-6666-666666666666", Username: "dev-snoop", Role: "user"}
+	owner := store.User{ID: "eeeeeeee-5555-5555-5555-555555555555", Username: "dev-rotate"}
+	other := store.User{ID: "ffffffff-6666-6666-6666-666666666666", Username: "dev-snoop"}
 	fake.addUser(owner)
 	fake.addUser(other)
 	ownerBearer := signBearer(t, s, owner)

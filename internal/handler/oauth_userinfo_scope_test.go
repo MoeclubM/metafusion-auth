@@ -11,21 +11,21 @@ import (
 	"github.com/MoeclubM/metafusion-auth/internal/store"
 )
 
-// 纯函数边界：会话令牌（scope 为空）保持全字段，第三方令牌只回被授予的部分。
+// 纯函数边界：只回被授予 scope 覆盖的字段。
 func TestUserinfoFieldsByScope(t *testing.T) {
-	u := &store.User{ID: "11111111-1111-1111-1111-111111111111", Username: "kana", Email: "kana@example.test", Role: "editor"}
+	u := &store.User{ID: "11111111-1111-1111-1111-111111111111", Username: "kana", Email: "kana@example.test"}
 	for _, tc := range []struct {
 		name    string
 		scope   string
 		want    []string
 		missing []string
 	}{
-		{"会话令牌（scope 为空）", "", []string{"sub", "id", "username", "role", "email"}, nil},
+		{"空 scope", "", []string{"sub", "id"}, []string{"username", "role", "email"}},
 		{"只授 email", "email", []string{"sub", "id", "email"}, []string{"username", "role"}},
-		{"只授 profile", "profile", []string{"sub", "id", "username", "role"}, []string{"email"}},
+		{"只授 profile", "profile", []string{"sub", "id", "username"}, []string{"role", "email"}},
 		{"只授 openid", "openid", []string{"sub", "id"}, []string{"username", "role", "email"}},
-		{"三项全授", "openid profile email", []string{"sub", "id", "username", "role", "email"}, nil},
-		{"多余空白与重复", "  email  email profile ", []string{"sub", "id", "username", "role", "email"}, nil},
+		{"三项全授", "openid profile email", []string{"sub", "id", "username", "email"}, []string{"role"}},
+		{"多余空白与重复", "  email  email profile ", []string{"sub", "id", "username", "email"}, []string{"role"}},
 		{"未知 scope 不放行", "openid phone", []string{"sub", "id"}, []string{"username", "role", "email"}},
 	} {
 		got := userinfoFields(u, tc.scope)
@@ -47,7 +47,7 @@ func TestUserinfoFieldsByScope(t *testing.T) {
 func TestUserinfoSlicesFieldsByGrantedScope(t *testing.T) {
 	r, s, fake := newOAuthTestServer(t)
 	fake.addClient("third-party", "示例第三方站点", []string{chainCallback}, []string{"openid", "profile", "email"}, false, "s3cret-value")
-	user := store.User{ID: "99999999-9999-9999-9999-999999999999", Username: "kana", Email: "kana@example.test", Role: "editor"}
+	user := store.User{ID: "99999999-9999-9999-9999-999999999999", Username: "kana", Email: "kana@example.test"}
 	fake.addUser(user)
 	bearer := signBearer(t, s, user)
 
@@ -87,7 +87,7 @@ func TestUserinfoSlicesFieldsByGrantedScope(t *testing.T) {
 	if emailOnly["sub"] != user.ID {
 		t.Errorf("sub 应恒回: %v", emailOnly)
 	}
-	for _, absent := range []string{"username", "role"} {
+	for _, absent := range []string{"username"} {
 		if v, ok := emailOnly[absent]; ok {
 			t.Errorf("未授予 profile 不得回 %s=%v（同意范围被放大）", absent, v)
 		}
@@ -95,7 +95,7 @@ func TestUserinfoSlicesFieldsByGrantedScope(t *testing.T) {
 
 	// 只授 profile：拿得到资料，拿不到邮箱。
 	profileOnly := grant("profile")
-	if profileOnly["username"] != user.Username || profileOnly["role"] != user.Role {
+	if profileOnly["username"] != user.Username {
 		t.Errorf("已授予 profile 就必须回资料: %v", profileOnly)
 	}
 	if v, ok := profileOnly["email"]; ok {
@@ -104,7 +104,7 @@ func TestUserinfoSlicesFieldsByGrantedScope(t *testing.T) {
 
 	// 三项全授：字段齐全（不误伤正常接入）。
 	full := grant("openid profile email")
-	for _, key := range []string{"sub", "id", "username", "role", "email"} {
+	for _, key := range []string{"sub", "id", "username", "email"} {
 		if _, ok := full[key]; !ok {
 			t.Errorf("全量授权下缺字段 %s: %v", key, full)
 		}

@@ -14,8 +14,8 @@ import (
 
 func TestDeveloperAuditLogsOnlyOwnApps(t *testing.T) {
 	r, s, fake := newOAuthTestServer(t)
-	owner := store.User{ID: "aaaaaaaa-1111-1111-1111-111111111111", Username: "audit-owner", Role: "user"}
-	other := store.User{ID: "bbbbbbbb-2222-2222-2222-222222222222", Username: "audit-other", Role: "user"}
+	owner := store.User{ID: "aaaaaaaa-1111-1111-1111-111111111111", Username: "audit-owner"}
+	other := store.User{ID: "bbbbbbbb-2222-2222-2222-222222222222", Username: "audit-other"}
 	fake.addUser(owner)
 	fake.addUser(other)
 	ownerBearer := signBearer(t, s, owner)

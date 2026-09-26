@@ -17,20 +17,18 @@ import (
 // User 是账号的对外投影；password_hash 永不出现在 JSON 里。
 //
 // Groups/Permissions 是权限组的投影：Groups 是组码，Permissions 是展开后的权限码集合。
-// 两者随 /auth/me 与访问令牌下发，各子系统据此判定自己的能力；role 是历史兼容字段
-// （admin/editor/user），由组成员关系推导，保留给尚未接入权限码的旧代码。
+// 两者随 /auth/me 与访问令牌下发，各子系统据此判定自己的能力。
 type User struct {
 	ID       string `json:"id"`
 	Username string `json:"username"`
 	Email    string `json:"email"`
-	Role     string `json:"role"`
 	// 昵称与简介：空串=未设置（前端回退用户名/占位），omitempty 保持既有载荷形状。
 	DisplayName string   `json:"display_name,omitempty"`
 	Bio         string   `json:"bio,omitempty"`
 	Groups      []string `json:"groups,omitempty"`
 	Permissions []string `json:"permissions,omitempty"`
 	// TokenUse 标记该身份所持令牌的用途（S01）：session=站内会话，oauth=第三方
-	// OAuth 访问令牌，id_token=OIDC 断言，空串=历史令牌（按会话语义兼容）。
+	// OAuth 访问令牌，id_token=OIDC 断言。
 	// ClientID/Scope 只在第三方身份上出现（哪次授权、授予了哪些 scope）。
 	// omitempty 保证站内载荷形状不变；下游管理 API 必须拒绝非会话用途。
 	TokenUse string `json:"token_use,omitempty"`
@@ -72,8 +70,7 @@ type Store struct {
 const schema = `
 CREATE SCHEMA IF NOT EXISTS auth;
 CREATE TABLE IF NOT EXISTS auth.users (
- id uuid PRIMARY KEY, username text NOT NULL UNIQUE, email text NOT NULL DEFAULT '', password_hash text NOT NULL,
- role text NOT NULL CHECK (role IN ('user','editor','admin'))
+ id uuid PRIMARY KEY, username text NOT NULL UNIQUE, email text NOT NULL DEFAULT '', password_hash text NOT NULL
 );
 ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS email text NOT NULL DEFAULT '';
 -- 账号封禁：被封禁的账号不能登录，已有服务端会话与第三方令牌立即失效（登录/续期/验签三处都拒）。
@@ -130,10 +127,6 @@ CREATE TABLE IF NOT EXISTS auth.oauth_audit (
  scopes text[] NOT NULL DEFAULT '{}', detail text NOT NULL DEFAULT '',
  created_at timestamptz NOT NULL DEFAULT now()
 );
--- 角色取值与主仓库迁移 000010 的终态对齐：早期库只有 editor/admin 两值，
--- 会让管理台把角色设成 user 时失败。这里只放宽取值集合，不会让既有数据失效。
-ALTER TABLE auth.users DROP CONSTRAINT IF EXISTS users_role_check;
-ALTER TABLE auth.users ADD CONSTRAINT users_role_check CHECK (role IN ('user','editor','admin'));
 -- 实例设置：注册开关、邀请码强度、限流参数等。键值对存放，未知键由应用层拒绝。
 CREATE TABLE IF NOT EXISTS auth.instance_settings (
  key text PRIMARY KEY, value jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now()

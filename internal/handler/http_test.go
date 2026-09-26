@@ -144,7 +144,7 @@ func TestAdminEndpointsEnforceAuthBeforeBusinessLogic(t *testing.T) {
 	if w := do(t, r, http.MethodGet, "/api/admin/users", ""); w.Code != 401 {
 		t.Fatalf("匿名访问管理端应 401，实际 %d", w.Code)
 	}
-	editorToken, _, _, err := s.Tokens.Sign(store.User{ID: "11111111-1111-1111-1111-111111111111", Username: "kana", Role: "editor"})
+	editorToken, _, _, err := s.Tokens.Sign(store.User{ID: "11111111-1111-1111-1111-111111111111", Username: "kana"})
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}

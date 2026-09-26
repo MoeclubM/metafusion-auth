@@ -19,7 +19,7 @@ import (
 )
 
 // auditActions 是「HTTP 方法 + 路由模板」→ 动作码。路由模板用 gin 的 FullPath 形状
-// （/api/admin/users/:id/role），不是请求里的真实路径。
+// （/api/admin/users/:id/groups），不是请求里的真实路径。
 //
 // 动作码只增不改：改名等于把历史记录切成两段，聚合查询会断。
 func auditActions() map[string]string {
@@ -42,7 +42,6 @@ func auditActions() map[string]string {
 		"PUT /api/admin/groups/:code":                     "group.updated",
 		"DELETE /api/admin/groups/:code":                  "group.deleted",
 		"POST /api/admin/users":                           "user.created",
-		"PUT /api/admin/users/:id/role":                   "user.role_changed",
 		"PUT /api/admin/users/:id/password":               "user.password_reset",
 		"PUT /api/admin/users/:id/ban":                    "user.banned",
 		"PUT /api/admin/users/:id/groups":                 "user.groups_changed",
@@ -107,7 +106,6 @@ func auditUserChanges(before *store.AuditUserSnapshot) map[string]any {
 	return map[string]any{
 		"username": before.Username,
 		"email":    before.Email,
-		"role":     before.Role,
 		"banned":   before.Banned,
 		"groups":   before.Groups,
 	}

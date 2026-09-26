@@ -121,7 +121,7 @@ func TestPersonalAccessTokenHTTPAgainstPostgres(t *testing.T) {
 		ExpiresAt   *time.Time `json:"expires_at"`
 	}
 	decodeInto(t, w, &principal)
-	if !principal.Valid || principal.UserID != memberID || principal.Username != memberName || principal.Role != "user" {
+	if !principal.Valid || principal.UserID != memberID || principal.Username != memberName {
 		t.Fatalf("内省身份不符: %+v", principal)
 	}
 	if principal.TokenID != created.Item.ID || principal.TokenName != "CI 编目" {

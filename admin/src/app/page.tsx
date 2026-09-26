@@ -18,7 +18,6 @@ import { AUTH_GROUPS_MANAGE, AUTH_USERS_MANAGE } from "@/lib/permissions";
 import { describeCodedError, USER_ERROR_KEYS } from "@/lib/errors";
 import { sortGroups } from "@/lib/format";
 import {
-  ADMIN_ROLES,
   createAdminUser,
   fetchAdminGroups,
   fetchAdminUsers,
@@ -27,7 +26,6 @@ import {
   resetUserPassword,
   setUserBanned,
   setUserGroups,
-  updateUserRole,
   type AdminGroup,
   type AdminUser,
 } from "@/lib/endpoints";
@@ -56,12 +54,6 @@ function sameGroupSet(a: string[], b: string[]): boolean {
   return b.every((code) => set.has(code));
 }
 
-function roleLabelKey(role: string): string {
-  if (role === "admin") return "users.role.admin";
-  if (role === "editor") return "users.role.editor";
-  return "users.role.user";
-}
-
 function UsersPanel() {
   const { t } = useI18n();
   const { user: me } = useSession();
@@ -71,13 +63,11 @@ function UsersPanel() {
 
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<AdminUser | null>(null);
-  const [form, setForm] = useState<{ role: string; password: string; groups: string[] }>({
-    role: "user",
+  const [form, setForm] = useState<{ password: string; groups: string[] }>({
     password: "",
     groups: [],
   });
   const [banTarget, setBanTarget] = useState<AdminUser | null>(null);
-  const [roleConfirm, setRoleConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
@@ -96,22 +86,18 @@ function UsersPanel() {
     );
   });
 
-  const currentRole = editing?.role ?? "user";
-  const roleChanged = editing != null && form.role !== currentRole;
-  const groupsChanged = editing != null && !roleChanged && !sameGroupSet(form.groups, editing.groups ?? []);
+  const groupsChanged = editing != null && !sameGroupSet(form.groups, editing.groups ?? []);
   const wantsPassword = form.password !== "";
   const passwordTooShort = wantsPassword && (form.password.length < MIN_PASSWORD || form.password.length > MAX_PASSWORD);
 
   const openEditor = (u: AdminUser) => {
     setEditing(u);
-    setForm({ role: u.role ?? "user", password: "", groups: [...(u.groups ?? [])] });
-    setRoleConfirm(false);
+    setForm({ password: "", groups: [...(u.groups ?? [])] });
     setMessage(null);
   };
 
   const closeEditor = () => {
     setEditing(null);
-    setRoleConfirm(false);
     setMessage(null);
   };
 
@@ -127,14 +113,11 @@ function UsersPanel() {
     setBusy(true);
     setMessage(null);
     try {
-      // 先角色后组：改角色会重建成员关系，此时刻意不再提交组选择（两个写入互相覆盖，只剩最后一个赢）。
-      if (roleChanged) await updateUserRole(editing.id, form.role);
       if (wantsPassword) await resetUserPassword(editing.id, form.password);
       if (groupsChanged) await setUserGroups(editing.id, form.groups);
       setEditing(null);
-      setRoleConfirm(false);
       setMessage({ kind: "ok", text: t("users.saveSuccess") });
-      // 改角色/改组都会动成员关系，所以一律重拉列表：本地推算出来的组名会与服务端不一致。
+      // 组成员关系以服务端返回为准。
       users.reload();
     } catch (err) {
       setMessage({ kind: "err", text: describeCodedError(err, t, AUTH_USERS_MANAGE, USER_ERROR_KEYS) });
@@ -149,13 +132,8 @@ function UsersPanel() {
       setMessage({ kind: "err", text: t("users.passwordTooShort") });
       return;
     }
-    if (!roleChanged && !groupsChanged && !wantsPassword) {
+    if (!groupsChanged && !wantsPassword) {
       setMessage({ kind: "err", text: t("users.noChanges") });
-      return;
-    }
-    // 改角色是覆盖式副作用（组会被重建），逐次确认；其余是可直接撤销的补丁。
-    if (roleChanged) {
-      setRoleConfirm(true);
       return;
     }
     void applyChanges();
@@ -282,7 +260,6 @@ function UsersPanel() {
 
       {message && !editing ? <StatusMessage kind={message.kind} text={message.text} /> : null}
 
-      <p className="text-[11px] text-text-faint leading-relaxed">{t("users.roleResetNote")}</p>
 
       <div className="relative flex items-center max-w-md">
         <Search className="absolute left-3 w-3.5 h-3.5 text-text-faint" />
@@ -312,7 +289,6 @@ function UsersPanel() {
               <thead>
                 <tr className="border-b border-line-subtle bg-surfaceSubtle text-text-muted font-mono">
                   <th className="py-2.5 px-3 font-medium">{t("users.col.user")}</th>
-                  <th className="py-2.5 px-3 font-medium">{t("users.col.role")}</th>
                   <th className="py-2.5 px-3 font-medium">{t("users.col.status")}</th>
                   <th className="py-2.5 px-3 font-medium">{t("users.col.groups")}</th>
                   <th className="py-2.5 px-3 font-medium text-right">{t("users.col.actions")}</th>
@@ -333,9 +309,6 @@ function UsersPanel() {
                           {u.email ? t("users.inlineEmail", { email: u.email }) + " · " : ""}
                           {t("users.inlineId", { id: u.id })}
                         </div>
-                      </td>
-                      <td className="py-2.5 px-3">
-                        <Chip>{t(roleLabelKey(u.role ?? "user"))}</Chip>
                       </td>
                       <td className="py-2.5 px-3">
                         <Chip tone={u.banned ? "danger" : "ok"}>{u.banned ? t("users.statusBanned") : t("users.statusActive")}</Chip>
@@ -407,23 +380,6 @@ function UsersPanel() {
             {message ? <StatusMessage kind={message.kind} text={message.text} /> : null}
 
             <div>
-              <label className={labelClass} htmlFor="edit-role">{t("users.field.role")}</label>
-              <select
-                id="edit-role"
-                value={form.role}
-                onChange={(e) => setForm((prev) => ({ ...prev, role: e.target.value }))}
-                className="w-full p-2 rounded-control bg-surfaceSubtle border border-line text-xs text-text-strong focus:border-primary outline-none cursor-pointer"
-              >
-                {ADMIN_ROLES.map((role) => (
-                  <option key={role} value={role}>
-                    {t(roleLabelKey(role))}
-                  </option>
-                ))}
-              </select>
-              <p className="mt-1.5 text-[11px] text-amber-400/90 leading-relaxed">{t("users.roleChangeWarn")}</p>
-            </div>
-
-            <div>
               <label className={labelClass} htmlFor="edit-password">{t("users.field.password")}</label>
               <input
                 id="edit-password"
@@ -443,7 +399,7 @@ function UsersPanel() {
                 {groups.error ? <span className="text-[10px] font-mono text-rose-300">{t("users.groupsForbiddenHint")}</span> : null}
               </div>
               {groups.error ? (
-                // 组清单取不到时不禁用整块编辑：角色与密码仍可改，只是组选择降级为只读展示。
+                // 组清单取不到时不禁用整块编辑：密码仍可改，只是组选择降级为只读展示。
                 <p className="p-2 rounded-control bg-rose-500/10 border border-rose-500/30 text-[11px] text-rose-300 leading-relaxed">
                   {groups.error}
                 </p>
@@ -455,11 +411,11 @@ function UsersPanel() {
                 {groupList.map((group) => (
                   <label
                     key={group.code}
-                    className={`flex items-center gap-2 ${roleChanged || groups.error ? "opacity-50" : "cursor-pointer"}`}
+                    className={`flex items-center gap-2 ${groups.error ? "opacity-50" : "cursor-pointer"}`}
                   >
                     <input
                       type="checkbox"
-                      disabled={roleChanged || groups.error != null}
+                      disabled={groups.error != null}
                       checked={form.groups.includes(group.code)}
                       onChange={() => toggleGroup(group.code)}
                       className="accent-primary"
@@ -484,16 +440,6 @@ function UsersPanel() {
           </div>
         ) : null}
       </Modal>
-
-      <ConfirmDialog
-        open={roleConfirm}
-        title={t("users.roleConfirmTitle")}
-        message={t("users.roleConfirm", { username: editing?.username ?? "", role: t(roleLabelKey(form.role)) })}
-        confirmLabel={t("action.save")}
-        busy={busy}
-        onClose={() => setRoleConfirm(false)}
-        onConfirm={() => void applyChanges()}
-      />
 
       <ConfirmDialog
         open={banTarget != null}

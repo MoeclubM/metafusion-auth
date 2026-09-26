@@ -45,8 +45,8 @@ func decodeInto(t *testing.T, w *httptest.ResponseRecorder, v any) {
 func TestOAuthAdminEndpointsEnforcePermission(t *testing.T) {
 	r, s, fake := newOAuthTestServer(t)
 	_ = fake
-	member := store.User{ID: "77777777-7777-7777-7777-777777777777", Username: "member", Role: "user", Permissions: []string{"community.post.create"}}
-	ops := store.User{ID: "88888888-8888-8888-8888-888888888888", Username: "ops", Role: "user", Permissions: []string{"auth.oauth.manage"}}
+	member := store.User{ID: "77777777-7777-7777-7777-777777777777", Username: "member", Permissions: []string{"community.post.create"}}
+	ops := store.User{ID: "88888888-8888-8888-8888-888888888888", Username: "ops", Permissions: []string{"auth.oauth.manage"}}
 	memberBearer := signBearer(t, s, member)
 	opsBearer := signBearer(t, s, ops)
 
@@ -80,7 +80,7 @@ func TestOAuthAdminEndpointsEnforcePermission(t *testing.T) {
 // 创建客户端：明文密钥只返回一次，之后的列表接口里既没有明文也没有哈希；非法输入逐项拒绝。
 func TestOAuthClientCreateReturnsSecretOnce(t *testing.T) {
 	r, s, fake := newOAuthTestServer(t)
-	ops := store.User{ID: "88888888-8888-8888-8888-888888888888", Username: "ops", Role: "user", Permissions: []string{"auth.oauth.manage"}}
+	ops := store.User{ID: "88888888-8888-8888-8888-888888888888", Username: "ops", Permissions: []string{"auth.oauth.manage"}}
 	opsBearer := signBearer(t, s, ops)
 
 	body := `{"client_id":"mfc-demo-1","name":"演示第三方站点","redirect_uris":["https://client.example/auth/callback"],"scopes":["openid","profile"],"trusted":false}`
@@ -144,10 +144,10 @@ func TestOAuthClientCreateReturnsSecretOnce(t *testing.T) {
 func TestOAuthClientUpdateAndTrustedSkipsConsent(t *testing.T) {
 	r, s, fake := newOAuthTestServer(t)
 	fake.addClient("third-party", "示例第三方站点", []string{chainCallback}, []string{"openid", "profile"}, false, "s3cret-value")
-	user := store.User{ID: "99999999-1111-1111-1111-111111111111", Username: "kana", Role: "user"}
+	user := store.User{ID: "99999999-1111-1111-1111-111111111111", Username: "kana"}
 	fake.addUser(user)
 	userBearer := signBearer(t, s, user)
-	ops := store.User{ID: "88888888-8888-8888-8888-888888888888", Username: "ops", Role: "user", Permissions: []string{"auth.oauth.manage"}}
+	ops := store.User{ID: "88888888-8888-8888-8888-888888888888", Username: "ops", Permissions: []string{"auth.oauth.manage"}}
 	opsBearer := signBearer(t, s, ops)
 
 	// 未受信：要先过同意页
@@ -197,10 +197,10 @@ func TestOAuthClientUpdateAndTrustedSkipsConsent(t *testing.T) {
 // 密钥轮换：返回新明文一次，老密钥立刻失效。
 func TestRotateSecretInvalidatesOldSecret(t *testing.T) {
 	r, s, fake := newOAuthTestServer(t)
-	user := store.User{ID: "99999999-2222-2222-2222-222222222222", Username: "kana", Role: "user"}
+	user := store.User{ID: "99999999-2222-2222-2222-222222222222", Username: "kana"}
 	fake.addUser(user)
 	userBearer := signBearer(t, s, user)
-	ops := store.User{ID: "88888888-8888-8888-8888-888888888888", Username: "ops", Role: "user", Permissions: []string{"auth.oauth.manage"}}
+	ops := store.User{ID: "88888888-8888-8888-8888-888888888888", Username: "ops", Permissions: []string{"auth.oauth.manage"}}
 	opsBearer := signBearer(t, s, ops)
 
 	w := doJSON(t, r, http.MethodPost, "/api/admin/oauth/clients", opsBearer,
@@ -245,10 +245,10 @@ func TestRotateSecretInvalidatesOldSecret(t *testing.T) {
 func TestDeleteClientAndSeededGuard(t *testing.T) {
 	r, s, fake := newOAuthTestServer(t)
 	fake.addClient("metafusion-forum", "MetaFusion 社区论坛", []string{chainCallback}, []string{"profile"}, true, "")
-	user := store.User{ID: "99999999-3333-3333-3333-333333333333", Username: "kana", Role: "user"}
+	user := store.User{ID: "99999999-3333-3333-3333-333333333333", Username: "kana"}
 	fake.addUser(user)
 	userBearer := signBearer(t, s, user)
-	ops := store.User{ID: "88888888-8888-8888-8888-888888888888", Username: "ops", Role: "user", Permissions: []string{"auth.oauth.manage"}}
+	ops := store.User{ID: "88888888-8888-8888-8888-888888888888", Username: "ops", Permissions: []string{"auth.oauth.manage"}}
 	opsBearer := signBearer(t, s, ops)
 
 	if w := doJSON(t, r, http.MethodDelete, "/api/admin/oauth/clients/metafusion-forum", opsBearer, ""); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "seeded_client_immutable") {
@@ -274,10 +274,10 @@ func TestDeleteClientAndSeededGuard(t *testing.T) {
 func TestRevokeTokensRejectsUserinfo(t *testing.T) {
 	r, s, fake := newOAuthTestServer(t)
 	fake.addClient("first-party", "第一方站点", []string{chainCallback}, []string{"profile"}, true, "")
-	user := store.User{ID: "99999999-4444-4444-4444-444444444444", Username: "kana", Email: "kana@example.test", Role: "user"}
+	user := store.User{ID: "99999999-4444-4444-4444-444444444444", Username: "kana", Email: "kana@example.test"}
 	fake.addUser(user)
 	userBearer := signBearer(t, s, user)
-	ops := store.User{ID: "88888888-8888-8888-8888-888888888888", Username: "ops", Role: "user", Permissions: []string{"auth.oauth.manage"}}
+	ops := store.User{ID: "88888888-8888-8888-8888-888888888888", Username: "ops", Permissions: []string{"auth.oauth.manage"}}
 	opsBearer := signBearer(t, s, ops)
 	authQuery := "client_id=first-party&redirect_uri=" + url.QueryEscape(chainCallback) + "&response_type=code&scope=profile"
 
@@ -347,10 +347,10 @@ func TestRevokeTokensRejectsUserinfo(t *testing.T) {
 func TestOAuthAuditsEndpointListsConsentDecisions(t *testing.T) {
 	r, s, fake := newOAuthTestServer(t)
 	fake.addClient("third-party", "示例第三方站点", []string{chainCallback}, []string{"openid", "profile"}, false, "s3cret-value")
-	user := store.User{ID: "99999999-5555-5555-5555-555555555555", Username: "kana", Role: "user"}
+	user := store.User{ID: "99999999-5555-5555-5555-555555555555", Username: "kana"}
 	fake.addUser(user)
 	userBearer := signBearer(t, s, user)
-	ops := store.User{ID: "88888888-8888-8888-8888-888888888888", Username: "ops", Role: "user", Permissions: []string{"auth.oauth.manage"}}
+	ops := store.User{ID: "88888888-8888-8888-8888-888888888888", Username: "ops", Permissions: []string{"auth.oauth.manage"}}
 	opsBearer := signBearer(t, s, ops)
 	authQuery := "client_id=third-party&redirect_uri=" + url.QueryEscape(chainCallback) + "&response_type=code&scope=openid+profile"
 

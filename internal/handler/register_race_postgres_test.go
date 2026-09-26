@@ -64,7 +64,7 @@ func TestConcurrentRegisterSameUsernameAgainstPostgres(t *testing.T) {
 	New(st).Register(r)
 
 	// 注册默认关闭（受控站点）：用例显式打开，收尾删掉该行回到默认值 false。
-	if err := st.UpdateSettings(ctx, map[string]any{store.SettingRegistrationEnabled: true}, &store.User{Role: "admin"}); err != nil {
+	if err := st.UpdateSettings(ctx, map[string]any{store.SettingRegistrationEnabled: true}, &store.User{}); err != nil {
 		t.Fatalf("打开注册开关: %v", err)
 	}
 	t.Cleanup(func() {
@@ -124,8 +124,8 @@ func TestConcurrentRegisterSameUsernameAgainstPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("开启占位事务: %v", err)
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO auth.users(id,username,email,password_hash,role) VALUES($1,$2,$3,$4,$5)",
-		uuid.NewString(), direct, direct+"@example.test", "placeholder-not-a-hash", "user"); err != nil {
+	if _, err := tx.ExecContext(ctx, "INSERT INTO auth.users(id,username,email,password_hash) VALUES($1,$2,$3,$4)",
+		uuid.NewString(), direct, direct+"@example.test", "placeholder-not-a-hash"); err != nil {
 		_ = tx.Rollback()
 		t.Fatalf("占位插入: %v", err)
 	}

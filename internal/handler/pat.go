@@ -133,7 +133,7 @@ func (h *Handler) registerTokens(api *gin.RouterGroup, limiter gin.HandlerFunc) 
 			c.Header("Cache-Control", "no-store")
 			c.JSON(http.StatusOK, gin.H{
 				"valid": true, "token_id": p.TokenID, "token_name": p.TokenName,
-				"user_id": p.UserID, "username": p.Username, "role": p.Role,
+				"user_id": p.UserID, "username": p.Username,
 				"permissions": p.Permissions, "scopes": p.Scopes,
 				"token_prefix": p.TokenPrefix, "expires_at": p.ExpiresAt,
 			})
