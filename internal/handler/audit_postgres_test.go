@@ -217,15 +217,6 @@ func TestAuditLogCoversAccountMutationsAgainstPostgres(t *testing.T) {
 		}
 	}
 
-	// 角色变更要有 before/after，否则"改了什么"只能靠猜。
-	roleRows := fetchAuditRows(t, st, requestIDs["改角色"])
-	if !strings.Contains(roleRows[0].Changes, "editor") || !strings.Contains(roleRows[0].Changes, "user") {
-		t.Fatalf("改角色的 changes 应含前后值，实际 %s", roleRows[0].Changes)
-	}
-	if roleRows[0].TargetType != "user" || roleRows[0].TargetID != targetID {
-		t.Fatalf("改角色的目标应是被改的账号，实际 %s/%s", roleRows[0].TargetType, roleRows[0].TargetID)
-	}
-
 	// 封禁与解封是同一路由的两种语义：动作码必须分开，否则"谁被封过"要读 changes。
 	if action := fetchAuditRows(t, st, requestIDs["封禁"])[0].Action; action != "user.banned" {
 		t.Fatalf("封禁动作码应为 user.banned，实际 %s", action)

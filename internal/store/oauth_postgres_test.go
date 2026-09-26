@@ -36,7 +36,7 @@ func TestOAuthServerAgainstPostgres(t *testing.T) {
 
 	const callback = "https://client.example/auth/callback"
 	userID := seedOAuthTestUser(t, ctx, s)
-	admin := &User{ID: userID, Username: "oauth-admin"}
+	admin := &User{ID: userID, Username: "oauth-admin", Permissions: []string{"auth.oauth.manage"}}
 	member := &User{ID: userID, Username: "oauth-member"}
 	clientID := "mfc-test-" + strings.ReplaceAll(newUUID(), "-", "")[:12]
 	// 轮换后的当前密钥：轮换接口只返回一次明文，这里存下来给后面的换码用。
