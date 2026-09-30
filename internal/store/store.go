@@ -169,6 +169,14 @@ CREATE TABLE IF NOT EXISTS auth.personal_access_tokens (
 );
 -- 列表与配额按 user_id 统计（每账号最多 10 张未吊销令牌），单独建索引避免全表扫。
 CREATE INDEX IF NOT EXISTS personal_access_tokens_user_idx ON auth.personal_access_tokens(user_id);
+-- Preserve original spelling; reject an upgrade with legacy collisions rather than merging accounts.
+DO $$
+BEGIN
+ IF EXISTS (SELECT 1 FROM auth.users GROUP BY lower(username) HAVING count(*) > 1) THEN
+  RAISE EXCEPTION 'username_case_conflict: resolve case-insensitive username collisions before upgrading';
+ END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS users_username_lower_key ON auth.users (lower(username));
 `
 
 // seedClients 是第一方 OAuth 客户端的种子：这三个客户端原先由目录服务在启动时写入

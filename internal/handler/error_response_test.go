@@ -62,6 +62,7 @@ func TestRespondMapsErrorsToStableCodes(t *testing.T) {
 		{"pq username unique", &pq.Error{Code: "23505", Constraint: "users_username_key",
 			Message: "duplicate key value violates unique constraint users_username_key",
 			Detail:  "Key (username)=(kana) already exists."}, http.StatusConflict, "username_or_email_taken"},
+		{"pq case-insensitive username unique", &pq.Error{Code: "23505", Constraint: "users_username_lower_key"}, http.StatusConflict, "username_or_email_taken"},
 		{"pq group code unique", &pq.Error{Code: "23505", Constraint: "groups_code_key"}, http.StatusConflict, "group_exists"},
 		{"pq other unique", &pq.Error{Code: "23505", Constraint: "user_groups_pkey"}, http.StatusConflict, "conflict"},
 		{"pq foreign key", &pq.Error{Code: "23503", Constraint: "sessions_user_id_fkey"}, http.StatusBadRequest, "constraint_violation"},
