@@ -131,9 +131,9 @@ func TestScopeAuditQueryConfinesNonPrivilegedCallers(t *testing.T) {
 		return q, scopeAuditQuery(c, &q)
 	}
 
-	plain := &store.User{ID: selfID, Username: "bob", Role: "user"}
-	privileged := &store.User{ID: selfID, Username: "bob", Role: "user", Permissions: []string{"auth.audit.read"}}
-	thirdParty := &store.User{ID: selfID, Username: "bob", Role: "user", TokenUse: store.TokenUseOAuth}
+	plain := &store.User{ID: selfID, Username: "bob"}
+	privileged := &store.User{ID: selfID, Username: "bob", Permissions: []string{"auth.audit.read"}}
+	thirdParty := &store.User{ID: selfID, Username: "bob", TokenUse: store.TokenUseOAuth}
 
 	if _, err := scoped(nil, ""); err == nil || err.Error() != "authentication_required" {
 		t.Fatalf("匿名应收敛为 authentication_required，实际 %v", err)
