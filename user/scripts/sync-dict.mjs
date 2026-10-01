@@ -3,6 +3,7 @@
 // 主站位置按 MF_MAIN_DIR 或并列检出推导；admin 与本应用同仓，相对路径稳定。
 // 跑完后必须 bun run i18n:check 全绿。
 import fs from "node:fs";
+import { translationKeys } from "./translation-keys.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -25,10 +26,9 @@ function walk(dir, out) {
   return out;
 }
 const keys = new Set(MANUAL);
-const re = /\bt\(\s*"([^"]+)"/g;
 for (const f of walk(path.join(ROOT, "src"))) {
   const text = fs.readFileSync(f, "utf8");
-  for (const m of text.matchAll(re)) keys.add(m[1]);
+  for (const key of translationKeys(text)) keys.add(key);
 }
 const load = (dir, loc) => JSON.parse(fs.readFileSync(path.join(dir, loc + ".json"), "utf8"));
 const missing = [];

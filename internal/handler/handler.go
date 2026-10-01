@@ -663,7 +663,7 @@ func postgresErrorResponse(pg *pq.Error) (int, string) {
 	switch pg.Code {
 	case "23505": // unique_violation
 		switch pg.Constraint {
-		case "users_username_key":
+		case "users_username_key", "users_username_lower_key":
 			return http.StatusConflict, "username_or_email_taken"
 		case "groups_code_key":
 			return http.StatusConflict, "group_exists"

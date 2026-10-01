@@ -75,10 +75,14 @@ func TestConcurrentRegisterSameUsernameAgainstPostgres(t *testing.T) {
 
 	// ── HTTP 层：并发注册同名 ──
 	name := raceName("http")
-	payload := fmt.Sprintf(`{"username":%q,"email":%q,"password":"race-test-password"}`, name, name+"@example.test")
 	t.Cleanup(func() { deleteNamedUser(t, st, name) })
 
-	codes, bodies := raceRegister(raceRacers, func(int) (int, string) {
+	codes, bodies := raceRegister(raceRacers, func(i int) (int, string) {
+		variant := name
+		if i%2 == 0 {
+			variant = strings.ToUpper(name)
+		}
+		payload := fmt.Sprintf(`{"username":%q,"email":%q,"password":"race-test-password"}`, variant, fmt.Sprintf("%s-%d@example.test", name, i))
 		req := httptest.NewRequest(http.MethodPost, "/api/auth/register", strings.NewReader(payload))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
@@ -106,7 +110,7 @@ func TestConcurrentRegisterSameUsernameAgainstPostgres(t *testing.T) {
 	}
 
 	var rows int
-	if err := st.DB.QueryRow("SELECT count(*) FROM auth.users WHERE username=$1", name).Scan(&rows); err != nil {
+	if err := st.DB.QueryRow("SELECT count(*) FROM auth.users WHERE lower(username)=lower($1)", name).Scan(&rows); err != nil {
 		t.Fatalf("回查账号数: %v", err)
 	}
 	if rows != 1 {
@@ -125,7 +129,7 @@ func TestConcurrentRegisterSameUsernameAgainstPostgres(t *testing.T) {
 		t.Fatalf("开启占位事务: %v", err)
 	}
 	if _, err := tx.ExecContext(ctx, "INSERT INTO auth.users(id,username,email,password_hash) VALUES($1,$2,$3,$4)",
-		uuid.NewString(), direct, direct+"@example.test", "placeholder-not-a-hash"); err != nil {
+		uuid.NewString(), strings.ToUpper(direct), direct+"@example.test", "placeholder-not-a-hash"); err != nil {
 		_ = tx.Rollback()
 		t.Fatalf("占位插入: %v", err)
 	}
@@ -160,7 +164,7 @@ func raceName(prefix string) string {
 // deleteNamedUser 收尾清掉同名账号：正常路径只有一行，竞态万一落了两行也不会把脏数据留下。
 func deleteNamedUser(t *testing.T, st *store.Store, name string) {
 	t.Helper()
-	rows, err := st.DB.Query("SELECT id FROM auth.users WHERE username=$1", name)
+	rows, err := st.DB.Query("SELECT id FROM auth.users WHERE lower(username)=lower($1)", name)
 	if err != nil {
 		t.Errorf("回查测试账号: %v", err)
 		return

@@ -5,9 +5,10 @@
 //   2. 没有空串值——空串在界面上等于"这里什么都没有"，比缺键更难发现；
 //   3. 源码里 t("...") 的字面量键在四语字典里都存在——挡住"新增文案忘了补字典"。
 //
-// 动态键（模板串、字符串拼接，如 instance.setting.<key>）不参与第 3 条：它们自带回落值。
+// 运行时选择的 auth 错误/提示键通过显式映射纳入检查。
 
 import fs from "node:fs";
+import { translationKeys } from "./translation-keys.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -50,12 +51,10 @@ const walk = (dir) => {
   return out;
 };
 
-const literal = /\bt\(\s*"([^"]+)"\s*[,)]/g;
 const usedKeys = new Map();
 for (const file of walk(path.join(ROOT, "src"))) {
   const text = fs.readFileSync(file, "utf8");
-  for (const match of text.matchAll(literal)) {
-    const key = match[1];
+  for (const key of translationKeys(text)) {
     if (!usedKeys.has(key)) usedKeys.set(key, path.relative(ROOT, file));
   }
 }

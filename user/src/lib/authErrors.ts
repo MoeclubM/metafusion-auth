@@ -4,6 +4,38 @@
 //
 // 同一句人话对应多个码时走别名表，避免为服务端的近义码各写一条文案。
 
+// Explicit keys let dictionary sync/check cover error codes chosen at runtime.
+const AUTH_ERROR_KEYS: Record<string, string> = {
+  invalid_credentials: "auth.error.invalid_credentials",
+  invalid_credentials_format: "auth.error.invalid_credentials_format",
+  invalid_username: "auth.error.invalid_username",
+  invalid_password_length: "auth.error.invalid_password_length",
+  invalid_email: "auth.error.invalid_email",
+  account_disabled: "auth.error.account_disabled",
+  login_blocked: "auth.error.login_blocked",
+  user_not_found: "auth.error.user_not_found",
+  user_already_exists: "auth.error.user_already_exists",
+  invalid_invite_code: "auth.error.invalid_invite_code",
+  registration_closed: "auth.error.registration_closed",
+  rate_limit_exceeded: "auth.error.rate_limit_exceeded",
+  unauthorized: "auth.error.unauthorized",
+  authentication_required: "auth.error.authentication_required",
+  forbidden: "auth.error.forbidden",
+  invalid_expiry: "auth.error.invalid_expiry",
+  invalid_scope: "auth.error.invalid_scope",
+  invalid_token_name: "auth.error.invalid_token_name",
+  scope_not_granted: "auth.error.scope_not_granted",
+  token_not_found: "auth.error.token_not_found",
+  token_limit_reached: "auth.error.token_limit_reached",
+  invalid_payload: "auth.error.invalid_payload",
+  invalid_old_password: "auth.error.invalid_old_password",
+  setup_complete: "auth.error.setup_complete",
+  setup_needed: "auth.error.setup_needed",
+  invite_required: "auth.error.invite_required",
+  invite_exhausted: "auth.error.invite_exhausted",
+  service_unavailable: "auth.error.service_unavailable",
+};
+
 const AUTH_ERROR_ALIASES: Record<string, string> = {
   // 注册撞名：服务端用 username_or_email_taken，历史上还有下面几种写法
   username_taken: "user_already_exists",
@@ -20,6 +52,7 @@ const AUTH_ERROR_ALIASES: Record<string, string> = {
   weak_password: "invalid_password_length",
   // 账号停用：服务端 fail() 给的 banned（403），历史上还有 account_disabled 写法。
   banned: "account_disabled",
+  account_banned: "account_disabled",
 };
 
 /** 读取响应错误对象上的状态码：只按字段探测，不 import api.ts 的错误类，避免跨模块耦合。 */
@@ -69,7 +102,8 @@ export function authErrorText(
   if (!raw) return t(fallbackKey);
   for (const candidate of [raw, AUTH_ERROR_ALIASES[raw]]) {
     if (!candidate) continue;
-    const key = `auth.error.${candidate}`;
+    const key = AUTH_ERROR_KEYS[candidate];
+    if (!key) continue;
     const translated = t(key);
     if (translated && translated !== key) return translated;
   }

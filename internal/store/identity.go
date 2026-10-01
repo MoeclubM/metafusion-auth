@@ -108,8 +108,10 @@ func (s *Store) Login(ctx context.Context, username, password string) (string, U
 	var u User
 	var stored string
 	var banned bool
-	err := s.DB.QueryRowContext(ctx, "SELECT id,username,COALESCE(email,''),password_hash,banned,COALESCE(display_name,''),COALESCE(bio,'') FROM auth.users WHERE username=$1 OR (email=$1 AND email<>'')", strings.TrimSpace(username)).Scan(&u.ID, &u.Username, &u.Email, &stored, &banned, &u.DisplayName, &u.Bio)
-	if err != nil || bcrypt.CompareHashAndPassword([]byte(stored), []byte(password)) != nil {
+	var matches int
+	err := s.DB.QueryRowContext(ctx, "SELECT id,username,COALESCE(email,''),password_hash,banned,COALESCE(display_name,''),COALESCE(bio,''),count(*) OVER () FROM auth.users WHERE lower(username)=lower($1) OR (email=$1 AND email<>'')", strings.TrimSpace(username)).Scan(&u.ID, &u.Username, &u.Email, &stored, &banned, &u.DisplayName, &u.Bio, &matches)
+	// Never choose an arbitrary account when a username overlaps another account's email.
+	if err != nil || matches != 1 || bcrypt.CompareHashAndPassword([]byte(stored), []byte(password)) != nil {
 		return "", u, fmt.Errorf("invalid_credentials")
 	}
 	// 封禁判定放在口令校验之后：口令对但不让进，与"口令错"必须给不同错误码，

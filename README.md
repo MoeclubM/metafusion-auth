@@ -270,6 +270,26 @@ PAT 内省是另一套独立限流（IP 与令牌双维度，**不读**上面两
   `schema_parity_test.go`、`schema_lifecycle_parity_test.go` 与 `pat_schema_parity_test.go`。
   追加只加在末尾：既有语句一字不改（幂等 DDL 就是本服务的"up-only 追加"）。
 
+### 用户名大小写兼容升级
+
+用户名登录和唯一性使用 PostgreSQL `lower(username)` 比较；保留原始用户名用于显示，密码仍严格区分大小写。注册、管理员建号和直接写库均受 `users_username_lower_key` 唯一索引保护。邮箱登录的既有精确匹配规则不变；若输入同时命中不同账号的用户名和邮箱，拒绝登录，不猜测账号归属。
+
+升级前由管理员在目标库只读检查：
+
+```sql
+SELECT lower(username) AS normalized_username, array_agg(id) AS account_ids
+FROM auth.users GROUP BY lower(username) HAVING count(*) > 1;
+
+-- 也检查不同账号的用户名/邮箱标识交叉重叠，避免升级后出现歧义登录。
+SELECT u.id AS username_account_id, e.id AS email_account_id
+FROM auth.users u JOIN auth.users e
+  ON u.id <> e.id AND e.email <> '' AND lower(u.username) = lower(e.email);
+```
+
+任一查询有结果，先核实归属并由管理员明确处理标识冲突，再升级。启动检查发现冲突会返回 `username_case_conflict` 并停止，不自动重命名、合并或删除账号。无冲突时启动幂等追加唯一索引；大表建议安排维护窗口以免建索引阻塞写入。先做预检、解决冲突并验证新实例就绪，再替换旧实例。尚未通过预检时保留旧服务，避免登录停机。
+
+回滚应用不要求删除索引，旧版仍能读写合法用户名；若确需恢复大小写区分的注册规则，先停用新版实例，再由管理员显式执行 `DROP INDEX IF EXISTS auth.users_username_lower_key;`。该操作不修改账号数据，但会重新允许大小写重复，因此重新升级前必须再做预检。
+
 ## 环境变量
 
 | 变量 | 默认 | 说明 |

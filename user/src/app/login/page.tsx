@@ -161,7 +161,7 @@ function LoginInner() {
   };
 
   return (
-    <div className="h-[100dvh] max-h-[100dvh] overflow-hidden bg-background relative flex flex-col p-4 sm:p-5">
+    <div className="min-h-[100dvh] bg-background relative flex flex-col p-4 sm:p-5">
       <PageContainer as="header" width="narrow" className="relative z-10 shrink-0">
         <div className="flex items-center justify-between gap-4">
           <Link href="/" title="MetaFusion" className="flex items-center gap-2.5 group">
@@ -174,8 +174,8 @@ function LoginInner() {
         </div>
       </PageContainer>
 
-      <PageContainer as="main" width="narrow" className="mf-enter relative z-10 flex-1 min-h-0 grid place-items-center py-3">
-        <div className="w-full max-w-md max-h-full overflow-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden space-y-3">
+      <PageContainer as="main" width="narrow" className="mf-enter relative z-10 flex-1 grid place-items-center py-6">
+        <div className="mx-auto w-full max-w-md space-y-3">
           {hasAdmin === false && (
             <Link
               href="/setup"
