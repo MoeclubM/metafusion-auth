@@ -1,10 +1,10 @@
 "use client";
 
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  ArrowLeft, FileClock, KeyRound, LogOut, ScrollText, ServerCog,
+  ArrowLeft, FileClock, KeyRound, LogOut, ServerCog,
   Shapes, ShieldCheck, Ticket, Users,
 } from "lucide-react";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -47,13 +47,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     items: group.items.filter((item) => can(user, SECTION_PERMISSIONS[item.key])),
   })).filter((group) => group.items.length > 0);
   const visibleNav = visibleGroups.flatMap((group) => group.items);
-  const activeHref = visibleNav.find((item) => item.href === "/" ? pathname === "/" : pathname.startsWith(item.href))?.href ?? visibleNav[0]?.href;
+  const activeHref = visibleNav.find((item) => item.href === "/" ? pathname === "/" : pathname.startsWith(item.href))?.href;
+  const entryHref = visibleNav[0]?.href;
+  useEffect(() => {
+    if (status === "ready" && pathname === "/" && !activeHref && entryHref) router.replace(entryHref);
+  }, [status, pathname, activeHref, entryHref, router]);
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-text-strong">
       <header className="sticky top-0 z-30 border-b border-line bg-surface/90 backdrop-blur">
-        <div className="mx-auto flex h-14 w-full max-w-page items-center justify-between gap-3 px-4 sm:px-6">
-          <div className="flex min-w-0 items-center gap-3">
+        <div className="mx-auto flex min-h-14 flex-wrap py-2 w-full max-w-page items-center justify-between gap-3 px-4 sm:px-6">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
             <a href="/admin" className="inline-flex shrink-0 items-center gap-1 text-xs text-text-muted hover:text-text-strong"><ArrowLeft className="h-4 w-4" />{t("app.backToHub")}</a>
             <span className="text-text-faint">/</span>
             <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-text-strong"><ShieldCheck className="h-4 w-4 shrink-0 text-primary" /><span className="truncate">{t("app.title")}</span></div>
@@ -71,7 +75,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <aside className="w-full shrink-0 lg:w-56">
             <div className="lg:hidden rounded-card border border-line-subtle bg-surfaceSubtle p-3">
               <label htmlFor="account-admin-section" className="mb-2 block text-xs font-medium text-text-muted">{t("nav.section")}</label>
-              <select id="account-admin-section" value={activeHref} onChange={(e) => router.push(e.target.value)} className="w-full rounded-control border border-line bg-surface px-3 py-2.5 text-sm text-text-strong">
+              <select id="account-admin-section" value={activeHref ?? ""} onChange={(e) => router.push(e.target.value)} className="w-full rounded-control border border-line bg-surface px-3 py-2.5 text-sm text-text-strong">
+                {!activeHref ? <option value="" disabled>{t("nav.section")}</option> : null}
                 {visibleGroups.map((group) => (
                   <optgroup key={group.labelKey} label={t(group.labelKey)}>
                     {group.items.map((item) => <option key={item.key} value={item.href}>{t(`nav.${item.key}`)}</option>)}
@@ -116,11 +121,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </main>
       </div>
 
-      <footer className="border-t border-line-subtle">
-        <div className="max-w-page mx-auto px-4 sm:px-6 py-4 text-[10px] font-mono text-text-faint flex items-center gap-2">
-          <ScrollText className="w-3 h-3" /><span>{t("app.footer")}</span>
-        </div>
-      </footer>
+
     </div>
   );
 }
