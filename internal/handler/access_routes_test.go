@@ -33,9 +33,23 @@ func TestAccessRoutesExistAndEnforceAuth(t *testing.T) {
 		{http.MethodGet, "/api/admin/invites"},
 		{http.MethodPost, "/api/admin/invites"},
 	}
-	for _, p := range admin {
-		if w := do(t, r, p.method, p.path, ""); w.Code != http.StatusUnauthorized {
+	protected := append(admin, []struct{ method, path string }{
+		{http.MethodPut, "/api/auth/profile"},
+		{http.MethodPut, "/api/auth/password"},
+		{http.MethodPost, "/api/auth/logout-all"},
+		{http.MethodGet, "/api/auth/oauth-grants"},
+		{http.MethodDelete, "/api/auth/oauth-grants/test-client"},
+	}...)
+	for _, p := range protected {
+		w := do(t, r, p.method, p.path, "")
+		if w.Code != http.StatusUnauthorized {
 			t.Errorf("%s %s 匿名应 401，实际 %d", p.method, p.path, w.Code)
+		}
+		var body struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body.Error != "authentication_required" {
+			t.Errorf("%s %s 匿名错误应为 authentication_required，实际 %s", p.method, p.path, w.Body.String())
 		}
 	}
 

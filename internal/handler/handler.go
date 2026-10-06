@@ -158,10 +158,6 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 	// 改自己的昵称与简介只有这一条入口（前端设置页也只调它）。空串=未设置，超限 400。
 	updateProfile := func(c *gin.Context) {
 		u := currentUser(c)
-		if u == nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-			return
-		}
 		var in struct {
 			DisplayName string `json:"display_name"`
 			Bio         string `json:"bio"`
@@ -369,10 +365,6 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 	// 改自己的密码只有这一条入口（前端设置页也只调它），参数是 old_password/new_password。
 	changePassword := func(c *gin.Context) {
 		u := currentUser(c)
-		if u == nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-			return
-		}
 		var in struct {
 			OldPassword string `json:"old_password"`
 			NewPassword string `json:"new_password"`
@@ -391,10 +383,6 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 
 	api.POST("/auth/logout-all", requireUser(), func(c *gin.Context) {
 		u := currentUser(c)
-		if u == nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-			return
-		}
 		clearSessionCookie(c)
 		err := s.LogoutAll(c.Request.Context(), u.ID)
 		audit.Describe(c, audit.Detail{TargetType: "user", TargetID: u.ID, Changes: map[string]any{"self_service": true}})
@@ -406,19 +394,11 @@ func (h *Handler) registerAuth(api *gin.RouterGroup, limiter gin.HandlerFunc) {
 	// 这里只认当前登录身份，路径里没有别人的 user id，因此普通成员也能收回自己的授权。
 	api.GET("/auth/oauth-grants", requireUser(), func(c *gin.Context) {
 		u := currentUser(c)
-		if u == nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication_required"})
-			return
-		}
 		items, err := s.ListOAuthGrants(c.Request.Context(), u.ID)
 		respond(c, gin.H{"items": items}, err)
 	})
 	api.DELETE("/auth/oauth-grants/:client_id", requireUser(), func(c *gin.Context) {
 		u := currentUser(c)
-		if u == nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication_required"})
-			return
-		}
 		clientID := c.Param("client_id")
 		n, err := s.RevokeOwnOAuthGrant(c.Request.Context(), u.ID, clientID)
 		if err == nil {
