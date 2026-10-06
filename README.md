@@ -295,13 +295,17 @@ FROM auth.users u JOIN auth.users e
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
 | `PORT` | `8081` | 监听端口 |
-| `DATABASE_URL` | 由 `DB_*` 拼装 | PostgreSQL 连接串（只使用 `auth` schema） |
+| `DATABASE_URL` | **必填** | PostgreSQL 连接串，使用账号域独立数据库身份；为空即拒绝启动，不读取 `DB_*` |
 | `AUTH_JWT_PRIVATE_KEY` | **必填** | RS256 私钥（PEM / base64 PEM）；为空即拒绝启动 |
 | `AUTH_JWT_ALLOW_EPHEMERAL_KEY` | 空 | 本地开发开关：`1`/`true`/`yes`/`on` 时允许进程内临时密钥（生产不要开，启动会打 WARNING） |
 | `AUTH_JWT_ISSUER` / `AUTH_JWT_AUDIENCE` | `https://findverse.cc/api` / `metafusion` | 必须与主仓库一致 |
 | `AUTH_ACCOUNT_URL` | 空 | 未登录跳转的账号页绝对地址；为空则用站点相对路径 `/account` |
 
 ## 运行
+
+直接运行时设置 `DATABASE_URL`，使用主仓授权 SQL 中的 `mf_auth` 身份。数据库实例可共用，业务凭据按域隔离，账号服务仅拥有账号域及所需审计权限；授权规则见主仓 [database-roles.md](https://github.com/MoeclubM/MetaFusion/blob/main/docs/architecture/database-roles.md)。连接串中的密码须进行 URL 编码。
+
+独立 Compose 部署先将 `.env.example` 复制为 `.env`，设置 `AUTH_DATABASE_URL` 与持久的 `AUTH_JWT_PRIVATE_KEY`。编排将 `AUTH_DATABASE_URL` 注入容器的 `DATABASE_URL`。
 
 ```bash
 go run cmd/server/main.go

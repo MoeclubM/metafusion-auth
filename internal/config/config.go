@@ -1,7 +1,6 @@
 package config
 
 import (
-	"net/url"
 	"os"
 	"strings"
 )
@@ -10,7 +9,8 @@ import (
 // NewTokenIssuerFromEnv 直接读取（AUTH_JWT_PRIVATE_KEY / AUTH_JWT_ISSUER /
 // AUTH_JWT_AUDIENCE），与主仓库共用同一份变量名，拆分期间不需要改 .env。
 type Config struct {
-	Port        string
+	Port string
+	// DatabaseURL 为必填的 PostgreSQL 连接串，使用账号域独立数据库身份。
 	DatabaseURL string
 	// 哪些对端算可信反向代理（TRUSTED_PROXIES，默认只信回环+RFC1918 私网）。
 	// 空串交给 internal/nettrust 的 Default；"none" 表示入口链上没有代理。
@@ -23,25 +23,7 @@ func Load() Config {
 		DatabaseURL:    env("DATABASE_URL", ""),
 		TrustedProxies: env("TRUSTED_PROXIES", ""),
 	}
-	if c.DatabaseURL == "" {
-		c.DatabaseURL = buildDSN()
-	}
 	return c
-}
-
-// buildDSN 用 url.URL 拼连接串：口令里的 @ : / ? # 等字符必须转义，
-// 直接字符串拼接会在这些字符上拼出非法 DSN（或连错主机）。
-func buildDSN() string {
-	u := url.URL{
-		Scheme: "postgres",
-		Host:   env("DB_HOST", "localhost") + ":" + env("DB_PORT", "5432"),
-		Path:   env("DB_NAME", "metafusion_db"),
-		User:   url.UserPassword(env("DB_USER", "metafusion"), os.Getenv("DB_PASSWORD")),
-	}
-	q := u.Query()
-	q.Set("sslmode", env("DB_SSLMODE", "disable"))
-	u.RawQuery = q.Encode()
-	return u.String()
 }
 
 func env(k, def string) string {
